@@ -1,0 +1,18 @@
+# /etc/zabbix-ai/config.yaml
+zabbix_instances:
+  - name: monitoring
+    url: https://monitoring.leapswitch.com
+    token_env: ZABBIX_TOKEN_MONITORING
+  - name: dcmonitoring
+    url: https://dcmonitoring.leapswitch.com
+    token_env: ZABBIX_TOKEN_DCMONITORING
+  - name: strads
+    url: https://monitoring.stradsolutions.com
+    token_env: ZABBIX_TOKEN_STRADS
+
+sqlite_path: /var/lib/zabbix-ai/state.db
+log_level: INFO
+
+default_model: claude-sonnet-4-6
+summary_model: claude-haiku-4-5-20251001
+max_tool_calls: 8
