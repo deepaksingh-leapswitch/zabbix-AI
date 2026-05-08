@@ -9,6 +9,7 @@ User=zabbix-ai
 Group=zabbix-ai
 WorkingDirectory=/opt/zabbix-ai
 EnvironmentFile=/etc/zabbix-ai/env
+Environment=ZABBIX_AI_CONFIG=/etc/zabbix-ai/config.yaml
 ExecStart=/opt/zabbix-ai/.venv/bin/uvicorn zabbix_ai.app:app --host 127.0.0.1 --port 8088
 Restart=on-failure
 RestartSec=5s

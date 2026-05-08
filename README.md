@@ -35,6 +35,24 @@ Set env vars (or place in `/etc/zabbix-ai/env`):
 - `ANTHROPIC_API_KEY` — Claude API key
 - `ZABBIX_TOKEN_<NAME>` — one per Zabbix instance, matching `token_env` in yaml
 
+## Slack adapter (optional)
+
+To enable `@zabbix-ai` in Slack:
+
+1. Create a Slack app at https://api.slack.com/apps with these scopes:
+   - `app_mentions:read`, `chat:write`, `chat:write.public`, `channels:history`
+2. Install to your workspace, copy the bot token (`xoxb-...`) and signing secret
+3. Add to `/etc/zabbix-ai/env`:
+   ```
+   SLACK_BOT_TOKEN=xoxb-...
+   SLACK_SIGNING_SECRET=...
+   ```
+4. Add the `slack:` section to `/etc/zabbix-ai/config.yaml` (see `config.example.yaml`)
+5. In Slack app settings → Event Subscriptions, set Request URL to
+   `https://zabbix-ai.internal/slack/events` and subscribe to `app_mention`
+6. Restart: `systemctl restart zabbix-ai`
+7. Invite the bot to your alert channel and mention it: `@zabbix-ai why is web-1 slow?`
+
 ## Deploy agent UserParameters
 
 On every host you want diagnosable, copy `deploy/zabbix-agent/diag.conf`
@@ -57,7 +75,7 @@ pytest -v
 ## Roadmap
 
 - v0.1+v0.2 (this branch) — CLI, orchestrator, ~15 read-only tools
-- v0.3 — Slack adapter
+- v0.3 — Slack adapter ✓ (feat/v0.3-slack)
 - v0.4 — Zabbix UI right-click adapter
 - v0.5 — Memory + pattern recognition + ticket history seeding
 - v0.6 — Forecasting / anomaly detection
