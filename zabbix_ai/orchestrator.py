@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from zabbix_ai.audit import AuditLog
+from zabbix_ai.prompts import SYSTEM_PROMPT, build_cached_system_blocks
+from zabbix_ai.tools import claude_tool_definitions, dispatch
+
+
+@dataclass
+class InvestigationContext:
+    source: str
+    question: str = ""
+    instance: str | None = None
+    eventid: int | None = None
+    ticket_id: int | None = None
+    customer_id: int | None = None
+    hostid: int | None = None
+    hostname: str | None = None
+    host_inventory_summary: str = ""
+
+@dataclass
+class InvestigationResult:
+    investigation_id: int
+    summary: str
+    tool_calls: int
+    tokens_in: int
+    tokens_out: int
+    duration_ms: int
+    transcript: list[dict[str, Any]] = field(default_factory=list)
+
+class Orchestrator:
+    def __init__(self, *, claude, audit: AuditLog, model: str, summary_model: str,
+                 max_tool_calls: int, clients: dict[str, Any]):
+        self.claude = claude
+        self.audit = audit
+        self.model = model
+        self.summary_model = summary_model
+        self.max_tool_calls = max_tool_calls
+        self.clients = clients
+
+    async def investigate(self, ctx: InvestigationContext) -> InvestigationResult:
+        start = time.monotonic()
+        inv_id = await self.audit.log_start(
+            source=ctx.source, instance=ctx.instance, eventid=ctx.eventid,
+            ticket_id=ctx.ticket_id, customer_id=ctx.customer_id,
+            hostid=ctx.hostid, hostname=ctx.hostname, model=self.model,
+        )
+        system_blocks = build_cached_system_blocks(
+            SYSTEM_PROMPT, claude_tool_definitions(), ctx.host_inventory_summary,
+        )
+        user_prompt = self._render_user_prompt(ctx)
+        messages: list[dict[str, Any]] = [{"role": "user", "content": user_prompt}]
+        tool_calls = 0
+        tokens_in = tokens_out = 0
+        final_text = ""
+
+        budget_exhausted = False
+        while True:
+            resp = await self.claude.create(
+                model=self.model, system=system_blocks,
+                tools=claude_tool_definitions(),
+                messages=messages, max_tokens=2048,
+            )
+            tokens_in += getattr(resp.usage, "input_tokens", 0) or 0
+            tokens_out += getattr(resp.usage, "output_tokens", 0) or 0
+
+            if resp.stop_reason == "end_turn" or budget_exhausted:
+                final_text = self._extract_text(resp.content)
+                break
+
+            if tool_calls >= self.max_tool_calls:
+                messages.append({"role": "user",
+                                 "content": "Tool budget exhausted. Produce final summary now."})
+                budget_exhausted = True
+                continue
+
+            messages.append({"role": "assistant", "content": resp.content})
+            tool_results = []
+            for block in resp.content:
+                if getattr(block, "type", None) != "tool_use":
+                    continue
+                tool_calls += 1
+                try:
+                    output = await dispatch(block.name, block.input or {},
+                                             context={"clients": self.clients,
+                                                      "investigation_id": inv_id})
+                    await self.audit.log_tool(inv_id, block.name, block.input or {}, output)
+                    tool_results.append({"type": "tool_result",
+                                         "tool_use_id": block.id,
+                                         "content": str(output)[:8000]})
+                except Exception as e:
+                    await self.audit.log_tool(inv_id, block.name, block.input or {},
+                                              f"ERROR: {e}")
+                    tool_results.append({"type": "tool_result",
+                                         "tool_use_id": block.id,
+                                         "content": f"ERROR: {e}",
+                                         "is_error": True})
+            messages.append({"role": "user", "content": tool_results})
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        await self.audit.log_end(
+            inv_id, summary=final_text, duration_ms=duration_ms,
+            tokens_in=tokens_in, tokens_out=tokens_out,
+        )
+        return InvestigationResult(
+            investigation_id=inv_id, summary=final_text,
+            tool_calls=tool_calls, tokens_in=tokens_in, tokens_out=tokens_out,
+            duration_ms=duration_ms, transcript=messages,
+        )
+
+    @staticmethod
+    def _render_user_prompt(ctx: InvestigationContext) -> str:
+        parts = [f"Source: {ctx.source}"]
+        if ctx.instance:
+            parts.append(f"Zabbix instance: {ctx.instance}")
+        if ctx.eventid:
+            parts.append(f"Event id: {ctx.eventid}")
+        if ctx.hostid:
+            parts.append(f"Host id: {ctx.hostid} ({ctx.hostname or ''})")
+        if ctx.ticket_id:
+            parts.append(f"Ticket id: {ctx.ticket_id}")
+        if ctx.question:
+            parts.append(f"\nQuestion / context:\n{ctx.question}")
+        parts.append(
+            "\nInvestigate using the provided tools and produce the final structured answer."
+        )
+        return "\n".join(parts)
+
+    @staticmethod
+    def _extract_text(content: list[Any]) -> str:
+        out = []
+        for b in content:
+            t = getattr(b, "type", None)
+            if t == "text":
+                out.append(getattr(b, "text", ""))
+        return "\n".join(out).strip()

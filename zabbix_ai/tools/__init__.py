@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -7,7 +8,9 @@ ToolFunc = Callable[..., Awaitable[Any]]
 ALLOWED_TOOLS: dict[str, ToolFunc] = {}
 _TOOL_META: dict[str, dict[str, Any]] = {}
 
-def register(name: str, *, description: str, schema: dict[str, Any]) -> Callable[[ToolFunc], ToolFunc]:
+def register(
+    name: str, *, description: str, schema: dict[str, Any]
+) -> Callable[[ToolFunc], ToolFunc]:
     def decorator(fn: ToolFunc) -> ToolFunc:
         ALLOWED_TOOLS[name] = fn
         _TOOL_META[name] = {"description": description, "input_schema": schema}

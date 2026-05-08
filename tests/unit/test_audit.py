@@ -1,8 +1,10 @@
-import json
 from pathlib import Path
+
 import pytest
-from zabbix_ai.memory import Memory
+
 from zabbix_ai.audit import AuditLog
+from zabbix_ai.memory import Memory
+
 
 @pytest.fixture
 async def audit(tmp_path):

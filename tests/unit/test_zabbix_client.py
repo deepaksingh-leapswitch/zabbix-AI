@@ -1,7 +1,9 @@
 import pytest
 import respx
 from httpx import Response
+
 from zabbix_ai.clients.zabbix import ZabbixClient, ZabbixError
+
 
 @pytest.fixture
 def client():

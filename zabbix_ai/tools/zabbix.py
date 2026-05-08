@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any
+
 from zabbix_ai.tools import register
 
 
@@ -32,7 +32,8 @@ def register_tools() -> None:
                     hostgroupid: int | None = None, _ctx: dict) -> list[dict]:
         return await _client(_ctx, instance).get_open_problems(hostid, hostgroupid)
 
-    @register("zabbix.get_host", description="Get full host info including groups, interfaces, inventory.",
+    @register("zabbix.get_host",
+              description="Get full host info including groups, interfaces, inventory.",
               schema={"type": "object",
                       "properties": {
                           "hostid": {"type": "integer"},

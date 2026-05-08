@@ -1,5 +1,7 @@
 import pytest
-from zabbix_ai.tools import register, dispatch, ALLOWED_TOOLS, claude_tool_definitions
+
+from zabbix_ai.tools import ALLOWED_TOOLS, claude_tool_definitions, dispatch, register
+
 
 def test_register_adds_tool():
     @register("test.echo", description="echo back",

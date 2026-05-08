@@ -1,7 +1,10 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from zabbix_ai.tools import dispatch
 from zabbix_ai.tools.zabbix import register_tools
-from zabbix_ai.tools import dispatch, ALLOWED_TOOLS
+
 
 @pytest.fixture
 def fake_client():

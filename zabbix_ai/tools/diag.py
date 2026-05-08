@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from zabbix_ai.tools import register
 
 ALLOWED_DIAG_KEYS = {
