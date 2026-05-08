@@ -79,3 +79,67 @@ unknown_key: foo
     monkeypatch.setenv("TOK", "tok")
     with pytest.raises(ValidationError):
         load_settings(cfg)
+
+
+def test_slack_settings_loaded(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("""
+zabbix_instances:
+  - name: monitoring
+    url: https://x.test
+    token_env: TOK
+slack:
+  bot_token_env: SLACK_BOT_TOKEN
+  signing_secret_env: SLACK_SIGNING_SECRET
+  default_instance: monitoring
+  channel_allowlist:
+    - C111
+    - C222
+sqlite_path: /tmp/x
+""")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("TOK", "tok")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("SLACK_SIGNING_SECRET", "shh")
+
+    s = load_settings(cfg)
+    assert s.slack is not None
+    assert s.slack.bot_token.get_secret_value() == "xoxb-test"
+    assert s.slack.signing_secret.get_secret_value() == "shh"
+    assert s.slack.default_instance == "monitoring"
+    assert s.slack.channel_allowlist == ["C111", "C222"]
+
+
+def test_slack_section_optional(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("""
+zabbix_instances:
+  - name: monitoring
+    url: https://x.test
+    token_env: TOK
+sqlite_path: /tmp/x
+""")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("TOK", "tok")
+    s = load_settings(cfg)
+    assert s.slack is None
+
+
+def test_slack_missing_token_env_raises(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("""
+zabbix_instances:
+  - name: monitoring
+    url: https://x.test
+    token_env: TOK
+slack:
+  bot_token_env: SLACK_BOT_TOKEN
+  signing_secret_env: SLACK_SIGNING_SECRET
+sqlite_path: /tmp/x
+""")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("TOK", "tok")
+    monkeypatch.setenv("SLACK_SIGNING_SECRET", "shh")
+    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+    with pytest.raises(ValueError, match="SLACK_BOT_TOKEN"):
+        load_settings(cfg)

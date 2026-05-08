@@ -16,3 +16,12 @@ log_level: INFO
 default_model: claude-sonnet-4-6
 summary_model: claude-haiku-4-5-20251001
 max_tool_calls: 8
+
+# Optional — enables the Slack mention adapter.
+# Comment out the whole `slack:` block to disable.
+slack:
+  bot_token_env: SLACK_BOT_TOKEN
+  signing_secret_env: SLACK_SIGNING_SECRET
+  default_instance: monitoring         # used when the user does not specify one
+  channel_allowlist:                    # only respond in these Slack channel IDs
+    - C0123456789                       # replace with real channel IDs
