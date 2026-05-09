@@ -21,25 +21,54 @@ _log = logging.getLogger(__name__)
 
 
 def _parse_json_lenient(text: str) -> dict:
-    """json.loads, but tolerant of ```json … ``` fences and surrounding prose.
+    """json.loads, but tolerant of common LLM output deviations.
 
-    Haiku occasionally wraps its JSON in markdown despite "output ONLY"
-    instructions; we extract the first {...} block and parse that.
+    Strips markdown fences, trailing prose, and falls back to extracting
+    the largest top-level {...} block. Returns an empty dict if everything
+    fails — callers treat empty as "skip write-back".
     """
     text = text.strip()
+    # strip ```json / ``` fences
     if text.startswith("```"):
-        # strip leading fence (with or without "json" tag) and trailing fence
         first_nl = text.find("\n")
         if first_nl > -1:
             text = text[first_nl + 1:]
         if text.rstrip().endswith("```"):
             text = text.rstrip()[:-3]
-    # last-ditch — find the first { and matching } pair
+    # find largest matching {...} pair (handles unescaped strings less badly
+    # than rfind alone — we walk from the first { and track brace depth)
     start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        text = text[start: end + 1]
-    return json.loads(text)
+    if start == -1:
+        return {}
+    depth = 0
+    in_string = False
+    escape = False
+    end = -1
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    candidate = text[start: end + 1] if end > start else text[start:]
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        return {}
 
 
 @dataclass

@@ -20,7 +20,7 @@ ALLOWED_DIAG_KEYS = {
     "diag.dmesg_tail", "diag.journal_tail", "diag.systemctl_status",
     "diag.ss_listen", "diag.ps_aux", "diag.iostat",
     "diag.mysql_status", "diag.mysql_processlist", "diag.apache_status",
-    "diag.snapshot",
+    "diag.snapshot", "diag.mail_queue",
 }
 
 
@@ -147,6 +147,13 @@ def register_tools() -> None:
     _register_simple("diag.mysql_processlist",
                      "MySQL SHOW FULL PROCESSLIST (Linux only).")
     _register_simple("diag.apache_status", "Apache server-status (Linux only).")
+    _register_simple(
+        "diag.mail_queue",
+        "Mail queue inspection: counts per folder, top 20 senders, "
+        "top 20 recipients, age distribution. Linux auto-detects "
+        "Postfix/Exim/mailq; Windows scans MailEnable. Envelope "
+        "addresses only — no message bodies or subject lines.",
+    )
 
     @register(
         "diag.systemctl_status",

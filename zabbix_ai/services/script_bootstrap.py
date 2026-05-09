@@ -46,6 +46,103 @@ def _ps_encoded(script: str) -> str:
     encoded = base64.b64encode(full.encode("utf-16-le")).decode("ascii")
     return f"powershell -NoProfile -OutputFormat Text -EncodedCommand {encoded}"
 
+# Linux mail-queue inspection. Auto-detects Postfix / Exim / sendmail-compat
+# mailq. Returns counts + top 20 senders + queue-id/timestamps. No subject
+# lines; sender/recipient envelope addresses only (option B per design).
+_LINUX_MAIL_QUEUE = """\
+if command -v postqueue >/dev/null 2>&1; then \
+    echo '=== Postfix queue summary ==='; \
+    postqueue -p 2>/dev/null | tail -3; \
+    echo; \
+    echo '=== top 20 senders ==='; \
+    postqueue -p 2>/dev/null | awk '/^[A-F0-9]+[*!]?[[:space:]]/{print $NF}' \
+        | sort | uniq -c | sort -rn | head -20; \
+    echo; \
+    echo '=== oldest 10 messages ==='; \
+    postqueue -p 2>/dev/null | awk '/^[A-F0-9]+[*!]?[[:space:]]/{print $3,$4,$5,$6,"  ",$NF}' \
+        | head -10; \
+elif command -v exim >/dev/null 2>&1; then \
+    echo '=== Exim queue ==='; \
+    exim -bpc 2>/dev/null; echo; \
+    exim -bp 2>/dev/null | awk '/^[0-9a-z]+ [0-9]+/ && NF==4 {print $NF}' \
+        | sort | uniq -c | sort -rn | head -20; \
+elif command -v mailq >/dev/null 2>&1; then \
+    echo '=== mailq output ==='; \
+    mailq 2>/dev/null | head -50; \
+else \
+    echo 'No supported MTA found (looked for postfix postqueue, exim, mailq)'; \
+fi"""
+
+# Windows MailEnable queue inspection.
+#
+# MailEnable's actual delivery queue is `Queues\SF\Outgoing\Messages\` (the
+# Store-and-Forward outbound spool with retry logic) — not `SMTP\Outgoing\`,
+# which contains submitted-but-not-yet-routed messages and historical stores.
+# The Zabbix item that reports the alert "Mail Queue count" maps to SF.
+#
+# .MAI files in SF\\Outgoing are full RFC822 messages, so we extract the
+# `From:` and `To:` headers (envelope addresses are not preserved in this
+# folder). No subject lines or message bodies — privacy option B.
+# Sample bounded to 200 most-recent files; works on queues of tens of thousands.
+_WINDOWS_MAIL_QUEUE_PS = """\
+$bases = @(
+  'C:\\Program Files (x86)\\Mail Enable\\Queues',
+  'C:\\Program Files\\Mail Enable\\Queues')
+$base = $bases | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $base) { 'MailEnable queue not found'; exit }
+Write-Output "Base: $base"
+Write-Output ''
+Write-Output '=== counts per top-level subfolder ==='
+Get-ChildItem $base -Directory -EA SilentlyContinue | ForEach-Object {
+  $sub = (Get-ChildItem $_.FullName -Filter *.MAI -File -Recurse `
+          -EA SilentlyContinue).Count
+  if ($sub -gt 0) {
+    [PSCustomObject]@{ Folder = $_.Name; Total = $sub }
+  }
+} | Sort Total -Desc | Format-Table -AutoSize | Out-String
+# The active outbound delivery queue
+$sf = Join-Path $base 'SF\\Outgoing\\Messages'
+if (Test-Path $sf) {
+  $files = Get-ChildItem $sf -Filter *.MAI -File -EA SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 200
+  Write-Output ('=== sampled ' + $files.Count + ' newest SF\\Outgoing\\Messages files ===')
+  Write-Output ''
+  Write-Output '=== top 20 senders (From:) ==='
+  # Grep envelope headers from first ~200 lines (covers DKIM-bloated headers).
+  # Regex anchor ^ requires no -SimpleMatch flag.
+  $files | ForEach-Object {
+    $m = Select-String -Path $_.FullName `
+          -Pattern '^From:\\s*(.+)$' -List -EA SilentlyContinue
+    if ($m) { $m.Matches[0].Groups[1].Value.Trim() }
+  } | Group-Object | Sort Count -Desc | Select -First 20 |
+    Format-Table Count, Name -AutoSize | Out-String
+  Write-Output '=== top 20 recipients (To:) ==='
+  $files | ForEach-Object {
+    $m = Select-String -Path $_.FullName `
+          -Pattern '^To:\\s*(.+)$' -List -EA SilentlyContinue
+    if ($m) { $m.Matches[0].Groups[1].Value.Trim() }
+  } | Group-Object | Sort Count -Desc | Select -First 20 |
+    Format-Table Count, Name -AutoSize | Out-String
+  Write-Output '=== age distribution (same sample) ==='
+  $files | ForEach-Object {
+    $days = [int]((Get-Date) - $_.LastWriteTime).TotalDays
+    if ($days -lt 1) { '<1 day' }
+    elseif ($days -lt 7) { '1-7 days' }
+    elseif ($days -lt 30) { '7-30 days' }
+    elseif ($days -lt 365) { '30-365 days' }
+    else { '>1 year' }
+  } | Group-Object | Sort Name |
+    Format-Table Name, Count -AutoSize | Out-String
+  Write-Output '=== sample timestamps (oldest 5, newest 5) ==='
+  $files | Sort-Object LastWriteTime |
+    Select-Object -First 5 -Property Name, LastWriteTime |
+    Format-Table -AutoSize | Out-String
+  $files | Sort-Object LastWriteTime -Descending |
+    Select-Object -First 5 -Property Name, LastWriteTime |
+    Format-Table -AutoSize | Out-String
+}
+"""
+
 # Linux multi-command snapshot — runs through /bin/sh on the agent.
 _LINUX_SNAPSHOT = (
     "echo '=== uptime ==='; uptime; "
@@ -198,6 +295,12 @@ DIAG_DEFINITIONS: list[DiagDef] = [
     DiagDef("diag.apache_status", "Apache server-status (Linux only).",
             linux="curl -s http://127.0.0.1/server-status?auto 2>/dev/null",
             windows=None),
+    DiagDef("diag.mail_queue",
+            "Mail queue inspection — counts, top senders, top recipients, "
+            "age distribution. Linux: Postfix / Exim / sendmail-compat mailq. "
+            "Windows: MailEnable. Envelope addresses only — no subject lines.",
+            linux=_LINUX_MAIL_QUEUE,
+            windows=_ps_encoded(_WINDOWS_MAIL_QUEUE_PS)),
     # Manualinput-using Windows diags can't use _ps_encoded because Zabbix
     # substitutes {MANUALINPUT} on the raw command string. The PowerShell
     # validator regex constrains the input to safe characters, so the inline
