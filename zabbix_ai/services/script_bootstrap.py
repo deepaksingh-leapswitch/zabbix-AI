@@ -75,73 +75,93 @@ fi"""
 
 # Windows MailEnable queue inspection.
 #
-# MailEnable's actual delivery queue is `Queues\SF\Outgoing\Messages\` (the
-# Store-and-Forward outbound spool with retry logic) — not `SMTP\Outgoing\`,
-# which contains submitted-but-not-yet-routed messages and historical stores.
-# The Zabbix item that reports the alert "Mail Queue count" maps to SF.
+# The Zabbix item `mailqueue.outgoing` counts files directly inside
+# `Queues\SMTP\Outgoing\` (NOT recursive into Messages, NOT SF\Outgoing).
+# These are tiny (~500 byte) envelope files in MailEnable's key=value
+# format with Sender, Recipients, CommandType (NDR/DELIVER), StatusCode,
+# Retries, Subject and Status — much more useful than RFC822 headers.
 #
-# .MAI files in SF\\Outgoing are full RFC822 messages, so we extract the
-# `From:` and `To:` headers (envelope addresses are not preserved in this
-# folder). No subject lines or message bodies — privacy option B.
-# Sample bounded to 200 most-recent files; works on queues of tens of thousands.
-_WINDOWS_MAIL_QUEUE_PS = """\
-$bases = @(
-  'C:\\Program Files (x86)\\Mail Enable\\Queues',
-  'C:\\Program Files\\Mail Enable\\Queues')
-$base = $bases | Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $base) { 'MailEnable queue not found'; exit }
-Write-Output "Base: $base"
-Write-Output ''
-Write-Output '=== counts per top-level subfolder ==='
-Get-ChildItem $base -Directory -EA SilentlyContinue | ForEach-Object {
-  $sub = (Get-ChildItem $_.FullName -Filter *.MAI -File -Recurse `
-          -EA SilentlyContinue).Count
-  if ($sub -gt 0) {
-    [PSCustomObject]@{ Folder = $_.Name; Total = $sub }
-  }
-} | Sort Total -Desc | Format-Table -AutoSize | Out-String
-# The active outbound delivery queue
-$sf = Join-Path $base 'SF\\Outgoing\\Messages'
-if (Test-Path $sf) {
-  $files = Get-ChildItem $sf -Filter *.MAI -File -EA SilentlyContinue |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 200
-  Write-Output ('=== sampled ' + $files.Count + ' newest SF\\Outgoing\\Messages files ===')
-  Write-Output ''
-  Write-Output '=== top 20 senders (From:) ==='
-  # Grep envelope headers from first ~200 lines (covers DKIM-bloated headers).
-  # Regex anchor ^ requires no -SimpleMatch flag.
-  $files | ForEach-Object {
-    $m = Select-String -Path $_.FullName `
-          -Pattern '^From:\\s*(.+)$' -List -EA SilentlyContinue
-    if ($m) { $m.Matches[0].Groups[1].Value.Trim() }
-  } | Group-Object | Sort Count -Desc | Select -First 20 |
-    Format-Table Count, Name -AutoSize | Out-String
-  Write-Output '=== top 20 recipients (To:) ==='
-  $files | ForEach-Object {
-    $m = Select-String -Path $_.FullName `
-          -Pattern '^To:\\s*(.+)$' -List -EA SilentlyContinue
-    if ($m) { $m.Matches[0].Groups[1].Value.Trim() }
-  } | Group-Object | Sort Count -Desc | Select -First 20 |
-    Format-Table Count, Name -AutoSize | Out-String
-  Write-Output '=== age distribution (same sample) ==='
-  $files | ForEach-Object {
-    $days = [int]((Get-Date) - $_.LastWriteTime).TotalDays
-    if ($days -lt 1) { '<1 day' }
-    elseif ($days -lt 7) { '1-7 days' }
-    elseif ($days -lt 30) { '7-30 days' }
-    elseif ($days -lt 365) { '30-365 days' }
-    else { '>1 year' }
-  } | Group-Object | Sort Name |
-    Format-Table Name, Count -AutoSize | Out-String
-  Write-Output '=== sample timestamps (oldest 5, newest 5) ==='
-  $files | Sort-Object LastWriteTime |
-    Select-Object -First 5 -Property Name, LastWriteTime |
-    Format-Table -AutoSize | Out-String
-  $files | Sort-Object LastWriteTime -Descending |
-    Select-Object -First 5 -Property Name, LastWriteTime |
-    Format-Table -AutoSize | Out-String
-}
-"""
+# Example envelope file content:
+#   DomainName=foo.com
+#   CommandType=NDR
+#   StatusCode=4
+#   Recipients=[SMTP:bob@foo.com]
+#   Sender=[SMTP:alice@foo.com]
+#   Retries=3
+#   Status=Unsent
+#
+# Files are tiny so we scan all of them. On busy hosts with >5K queued
+# the 30s Zabbix script timeout may bite; AI sees timeout as queue-bloat
+# evidence. No subject-line / body output (privacy option B).
+_WINDOWS_MAIL_QUEUE_PS = (
+    "$base=@('C:\\Program Files (x86)\\Mail Enable\\Queues',"
+    "'C:\\Program Files\\Mail Enable\\Queues')|?{Test-Path $_}|select -First 1;"
+    "if(-not $base){'MailEnable queue not found';exit};"
+    "\"Base: $base\";'';"
+    "'=== counts per subfolder (recursive) ===';"
+    "gci $base -Directory -EA 0|%{"
+    "$n=(gci $_.FullName -Filter *.MAI -File -Recurse -EA 0).Count;"
+    "if($n -gt 0){[pscustomobject]@{Folder=$_.Name;Total=$n}}"
+    "}|sort Total -Desc|ft -A|Out-String;"
+    "$out=Join-Path $base 'SMTP\\Outgoing';"
+    "if(Test-Path $out){"
+    "$all=gci $out -Filter *.MAI -File -EA 0;"
+    "$total=$all.Count;"
+    "$f=$all|sort LastWriteTime -Desc|select -First 2000;"
+    "if($total -gt $f.Count){"
+    "\"=== queue total $total envelope files; scanning $($f.Count) most-recent for breakdown ===\""
+    "}else{\"=== scanning all $total envelope files ===\"};"
+    "'';"
+    "$now=Get-Date;"
+    # Use [IO.File]::ReadAllText (much faster than Get-Content per file) and
+    # one regex per field rather than line-by-line iteration.
+    "$r=$f|%{"
+    "$d=[int]($now-$_.LastWriteTime).TotalDays;"
+    "$b=if($d -lt 1){'today_lt1d'}elseif($d -lt 7){'recent_1-7d'}"
+    "elseif($d -lt 30){'mid_7-30d'}elseif($d -lt 365){'old_30-365d'}"
+    "else{'stale_gt1y'};"
+    "$c=[IO.File]::ReadAllText($_.FullName);"
+    "$sn=$null;$rc=$null;$dm=$null;$ct=$null;$st=$null;$sc=$null;$rt=$null;"
+    "if($c -match '(?m)^Sender=(.*)$'){$sn=$Matches[1].Trim()};"
+    "if($c -match '(?m)^Recipients=(.*)$'){$rc=$Matches[1].Trim()};"
+    "if($c -match '(?m)^DomainName=(.*)$'){$dm=$Matches[1].Trim()};"
+    "if($c -match '(?m)^CommandType=(.*)$'){$ct=$Matches[1].Trim()};"
+    "if($c -match '(?m)^Status=(.*)$'){$st=$Matches[1].Trim()};"
+    "if($c -match '(?m)^StatusCode=(.*)$'){$sc=$Matches[1].Trim()};"
+    "if($c -match '(?m)^Retries=(.*)$'){$rt=$Matches[1].Trim()};"
+    "[pscustomobject]@{B=$b;D=$d;Sender=$sn;Recipients=$rc;Domain=$dm;"
+    "CommandType=$ct;Status=$st;StatusCode=$sc;Retries=$rt}"
+    "};"
+    "'=== age distribution ===';"
+    "$r|group B|sort Name|ft Name,Count -A|Out-String;"
+    "'=== command type (NDR vs DELIVER) ===';"
+    "$r|group CommandType|sort Count -Desc|ft Count,Name -A|Out-String;"
+    "'=== status code distribution ===';"
+    "$r|group StatusCode|sort Count -Desc|ft Count,Name -A|Out-String;"
+    "'=== retry count distribution ===';"
+    "$r|group Retries|sort Name|ft Name,Count -A|Out-String;"
+    "'=== top 20 destination domains ===';"
+    "$r|?{$_.Domain}|group Domain|sort Count -Desc|select -First 20|"
+    "ft Count,Name -A|Out-String;"
+    "'=== top 20 senders (envelope) ===';"
+    "$r|?{$_.Sender}|group Sender|sort Count -Desc|select -First 20|"
+    "ft Count,Name -A|Out-String;"
+    "'=== top 20 recipients (envelope) ===';"
+    "$r|?{$_.Recipients}|group Recipients|sort Count -Desc|select -First 20|"
+    "ft Count,Name -A|Out-String;"
+    "foreach($k in @('today_lt1d','recent_1-7d','mid_7-30d','old_30-365d','stale_gt1y')){"
+    "$br=$r|?{$_.B -eq $k};"
+    "if($br){"
+    "\"=== $k - $(@($br).Count) messages — top 5 destinations ===\";"
+    "$br|?{$_.Domain}|group Domain|sort Count -Desc|select -First 5|"
+    "ft Count,Name -A|Out-String"
+    "}};"
+    "'=== oldest 5 ==='; $f|sort LastWriteTime|"
+    "select -First 5 Name,LastWriteTime|ft -A|Out-String;"
+    "'=== newest 5 ==='; $f|sort LastWriteTime -Desc|"
+    "select -First 5 Name,LastWriteTime|ft -A|Out-String"
+    "}"
+)
 
 # Linux multi-command snapshot — runs through /bin/sh on the agent.
 _LINUX_SNAPSHOT = (
