@@ -1,0 +1,322 @@
+from __future__ import annotations
+
+import json
+import logging
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from zabbix_ai.audit import AuditLog
+from zabbix_ai.memory import (
+    Memory,
+    compute_pattern_signature,
+    upsert_host_facts,
+    upsert_pattern,
+)
+from zabbix_ai.prompts import SYSTEM_PROMPT, build_cached_system_blocks
+from zabbix_ai.tools import claude_tool_definitions, dispatch
+
+_log = logging.getLogger(__name__)
+
+
+@dataclass
+class InvestigationContext:
+    source: str
+    question: str = ""
+    instance: str | None = None
+    eventid: int | None = None
+    ticket_id: int | None = None
+    customer_id: int | None = None
+    hostid: int | None = None
+    hostname: str | None = None
+    host_inventory_summary: str = ""
+    problem_name: str = ""
+    hostgroup: str = ""
+
+@dataclass
+class InvestigationResult:
+    investigation_id: int
+    summary: str
+    tool_calls: int
+    tokens_in: int
+    tokens_out: int
+    duration_ms: int
+    transcript: list[dict[str, Any]] = field(default_factory=list)
+    pattern_signature: str = ""
+
+class Orchestrator:
+    def __init__(self, *, claude, audit: AuditLog, model: str, summary_model: str,
+                 max_tool_calls: int, clients: dict[str, Any],
+                 memory: Memory | None = None,
+                 hostbill_client=None):
+        self.claude = claude
+        self.audit = audit
+        self.model = model
+        self.summary_model = summary_model
+        self.max_tool_calls = max_tool_calls
+        self.clients = clients
+        self.memory = memory
+        self.hostbill_client = hostbill_client
+
+    async def investigate(self, ctx: InvestigationContext) -> InvestigationResult:
+        start = time.monotonic()
+        inv_id = await self.audit.log_start(
+            source=ctx.source, instance=ctx.instance, eventid=ctx.eventid,
+            ticket_id=ctx.ticket_id, customer_id=ctx.customer_id,
+            hostid=ctx.hostid, hostname=ctx.hostname, model=self.model,
+        )
+        system_blocks = build_cached_system_blocks(
+            SYSTEM_PROMPT, claude_tool_definitions(), ctx.host_inventory_summary,
+        )
+        user_prompt = self._render_user_prompt(ctx)
+        messages: list[dict[str, Any]] = [{"role": "user", "content": user_prompt}]
+        tool_calls = 0
+        tokens_in = tokens_out = 0
+        final_text = ""
+
+        budget_exhausted = False
+        while True:
+            resp = await self.claude.create(
+                model=self.model, system=system_blocks,
+                tools=claude_tool_definitions(),
+                messages=messages, max_tokens=2048,
+            )
+            tokens_in += getattr(resp.usage, "input_tokens", 0) or 0
+            tokens_out += getattr(resp.usage, "output_tokens", 0) or 0
+
+            if resp.stop_reason == "end_turn" or budget_exhausted:
+                final_text = self._extract_text(resp.content)
+                break
+
+            if tool_calls >= self.max_tool_calls:
+                messages.append({"role": "user",
+                                 "content": "Tool budget exhausted. Produce final summary now."})
+                budget_exhausted = True
+                continue
+
+            messages.append({"role": "assistant", "content": resp.content})
+            tool_results = []
+            for block in resp.content:
+                if getattr(block, "type", None) != "tool_use":
+                    continue
+                tool_calls += 1
+                try:
+                    output = await dispatch(block.name, block.input or {},
+                                             context={
+                                                 "clients": self.clients,
+                                                 "investigation_id": inv_id,
+                                                 "memory": self.memory,
+                                                 "hostbill_client": self.hostbill_client,
+                                             })
+                    await self.audit.log_tool(inv_id, block.name, block.input or {}, output)
+                    tool_results.append({"type": "tool_result",
+                                         "tool_use_id": block.id,
+                                         "content": str(output)[:8000]})
+                except Exception as e:
+                    await self.audit.log_tool(inv_id, block.name, block.input or {},
+                                              f"ERROR: {e}")
+                    tool_results.append({"type": "tool_result",
+                                         "tool_use_id": block.id,
+                                         "content": f"ERROR: {e}",
+                                         "is_error": True})
+            messages.append({"role": "user", "content": tool_results})
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        await self.audit.log_end(
+            inv_id, summary=final_text, duration_ms=duration_ms,
+            tokens_in=tokens_in, tokens_out=tokens_out,
+        )
+        signature = await self._write_back(
+            ctx=ctx, investigation_id=inv_id, final_text=final_text,
+        )
+        return InvestigationResult(
+            investigation_id=inv_id, summary=final_text,
+            tool_calls=tool_calls, tokens_in=tokens_in, tokens_out=tokens_out,
+            duration_ms=duration_ms, transcript=messages,
+            pattern_signature=signature,
+        )
+
+    async def _write_back(self, *, ctx: InvestigationContext,
+                          investigation_id: int,
+                          final_text: str) -> str:
+        """Run a cheap summarisation pass and update memory.
+
+        Returns the pattern signature (empty string if write-back failed or
+        memory is not configured).
+        """
+        if self.memory is None or not ctx.problem_name:
+            return ""
+        sig = compute_pattern_signature(problem_name=ctx.problem_name,
+                                         hostgroup=ctx.hostgroup or "")
+        try:
+            prompt = (
+                "Summarise this investigation as a JSON object with keys: "
+                "root_cause_short (one sentence), fix_short (one sentence), "
+                "host_facts (object of key→value strings, can be empty). "
+                "Output ONLY the JSON object.\n\n"
+                f"Investigation summary:\n{final_text[:4000]}"
+            )
+            resp = await self.claude.create(
+                model=self.summary_model,
+                system=[{"type": "text",
+                         "text": "You extract structured facts from "
+                                  "investigation summaries."}],
+                tools=[],
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=400,
+            )
+            text = self._extract_text(resp.content)
+            data = json.loads(text)
+            await upsert_pattern(
+                self.memory, signature=sig,
+                typical_root_cause=str(data.get("root_cause_short", "")),
+                typical_fix=str(data.get("fix_short", "")),
+            )
+            facts = data.get("host_facts") or {}
+            if isinstance(facts, dict) and ctx.hostid is not None and facts:
+                await upsert_host_facts(
+                    self.memory, hostid=ctx.hostid,
+                    facts={k: str(v) for k, v in facts.items()
+                           if isinstance(v, (str, int, float))},
+                    source_investigation_id=investigation_id,
+                )
+        except Exception as e:
+            _log.warning("write_back failed for inv %s: %s",
+                         investigation_id, e)
+        return sig
+
+    @staticmethod
+    def _render_user_prompt(ctx: InvestigationContext) -> str:
+        parts = [f"Source: {ctx.source}"]
+        if ctx.instance:
+            parts.append(f"Zabbix instance: {ctx.instance}")
+        if ctx.eventid:
+            parts.append(f"Event id: {ctx.eventid}")
+        if ctx.hostid:
+            parts.append(f"Host id: {ctx.hostid} ({ctx.hostname or ''})")
+        if ctx.ticket_id:
+            parts.append(f"Ticket id: {ctx.ticket_id}")
+        if ctx.question:
+            parts.append(f"\nQuestion / context:\n{ctx.question}")
+        parts.append(
+            "\nInvestigate using the provided tools and produce the final structured answer."
+        )
+        return "\n".join(parts)
+
+    @staticmethod
+    def _extract_text(content: list[Any]) -> str:
+        out = []
+        for b in content:
+            t = getattr(b, "type", None)
+            if t == "text":
+                out.append(getattr(b, "text", ""))
+        return "\n".join(out).strip()
+
+    async def investigate_streaming(self, ctx: InvestigationContext):
+        """Yield SSE-friendly events as the tool-use loop runs.
+
+        Each yielded value is {"event": <str>, "data": <dict|str>}.
+        Event kinds: started, tool_call, tool_result, thinking, final.
+        """
+        import time as _time
+        start = _time.monotonic()
+        inv_id = await self.audit.log_start(
+            source=ctx.source, instance=ctx.instance, eventid=ctx.eventid,
+            ticket_id=ctx.ticket_id, customer_id=ctx.customer_id,
+            hostid=ctx.hostid, hostname=ctx.hostname, model=self.model,
+        )
+        yield {"event": "started", "data": {"investigation_id": inv_id,
+                                             "model": self.model}}
+
+        system_blocks = build_cached_system_blocks(
+            SYSTEM_PROMPT, claude_tool_definitions(), ctx.host_inventory_summary,
+        )
+        messages: list[dict[str, Any]] = [
+            {"role": "user", "content": self._render_user_prompt(ctx)},
+        ]
+        tool_calls = 0
+        tokens_in = tokens_out = 0
+        final_text = ""
+        budget_exhausted = False
+
+        while True:
+            resp = await self.claude.create(
+                model=self.model, system=system_blocks,
+                tools=claude_tool_definitions(),
+                messages=messages, max_tokens=2048,
+            )
+            tokens_in += getattr(resp.usage, "input_tokens", 0) or 0
+            tokens_out += getattr(resp.usage, "output_tokens", 0) or 0
+
+            text_chunks = [getattr(b, "text", "") for b in resp.content
+                           if getattr(b, "type", None) == "text"]
+            if text_chunks:
+                yield {"event": "thinking",
+                       "data": {"text": "\n".join(text_chunks)}}
+
+            if resp.stop_reason == "end_turn" or budget_exhausted:
+                final_text = "\n".join(text_chunks).strip()
+                break
+
+            if tool_calls >= self.max_tool_calls:
+                messages.append({"role": "user",
+                                 "content": "Tool budget exhausted. "
+                                            "Produce final summary now."})
+                budget_exhausted = True
+                continue
+
+            messages.append({"role": "assistant", "content": resp.content})
+            tool_results = []
+            for block in resp.content:
+                if getattr(block, "type", None) != "tool_use":
+                    continue
+                tool_calls += 1
+                yield {"event": "tool_call",
+                       "data": {"name": block.name,
+                                "input": block.input or {},
+                                "tool_use_id": block.id}}
+                try:
+                    output = await dispatch(block.name, block.input or {},
+                                             context={
+                                                 "clients": self.clients,
+                                                 "investigation_id": inv_id,
+                                                 "memory": self.memory,
+                                                 "hostbill_client": self.hostbill_client,
+                                             })
+                    await self.audit.log_tool(inv_id, block.name,
+                                              block.input or {}, output)
+                    yield {"event": "tool_result",
+                           "data": {"tool_use_id": block.id,
+                                    "output": str(output)[:8000],
+                                    "is_error": False}}
+                    tool_results.append({"type": "tool_result",
+                                         "tool_use_id": block.id,
+                                         "content": str(output)[:8000]})
+                except Exception as e:
+                    msg = f"ERROR: {e}"
+                    await self.audit.log_tool(inv_id, block.name,
+                                              block.input or {}, msg)
+                    yield {"event": "tool_result",
+                           "data": {"tool_use_id": block.id,
+                                    "output": msg, "is_error": True}}
+                    tool_results.append({"type": "tool_result",
+                                         "tool_use_id": block.id,
+                                         "content": msg, "is_error": True})
+            messages.append({"role": "user", "content": tool_results})
+
+        duration_ms = int((_time.monotonic() - start) * 1000)
+        await self.audit.log_end(
+            inv_id, summary=final_text, duration_ms=duration_ms,
+            tokens_in=tokens_in, tokens_out=tokens_out,
+        )
+        signature = await self._write_back(
+            ctx=ctx, investigation_id=inv_id, final_text=final_text,
+        )
+        yield {"event": "final",
+               "data": {"investigation_id": inv_id,
+                        "summary": final_text,
+                        "tool_calls": tool_calls,
+                        "tokens_in": tokens_in,
+                        "tokens_out": tokens_out,
+                        "duration_ms": duration_ms,
+                        "pattern_signature": signature}}

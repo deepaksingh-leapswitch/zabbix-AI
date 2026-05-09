@@ -1,0 +1,39 @@
+# /etc/zabbix-ai/config.yaml
+zabbix_instances:
+  - name: monitoring
+    url: https://monitoring.leapswitch.com
+    token_env: ZABBIX_TOKEN_MONITORING
+  - name: dcmonitoring
+    url: https://dcmonitoring.leapswitch.com
+    token_env: ZABBIX_TOKEN_DCMONITORING
+  - name: strads
+    url: https://monitoring.stradsolutions.com
+    token_env: ZABBIX_TOKEN_STRADS
+
+sqlite_path: /var/lib/zabbix-ai/state.db
+log_level: INFO
+
+default_model: claude-sonnet-4-6
+summary_model: claude-haiku-4-5-20251001
+max_tool_calls: 8
+
+# Optional — enables the Slack mention adapter.
+# Comment out the whole `slack:` block to disable.
+slack:
+  bot_token_env: SLACK_BOT_TOKEN
+  signing_secret_env: SLACK_SIGNING_SECRET
+  default_instance: monitoring         # used when the user does not specify one
+  channel_allowlist:                    # only respond in these Slack channel IDs
+    - C0123456789                       # replace with real channel IDs
+
+# Optional — enables the Zabbix UI right-click adapter.
+zabbix_ui:
+  signing_key_env: URL_SIGNING_KEY
+  link_ttl_seconds: 300        # how long a right-click URL is valid
+
+# Optional — enables HostBill ticket lookup as an investigation tool.
+# Leave commented out until you have an API user with read access to tickets.
+hostbill:
+  api_url: https://billing.leapswitch.com/admin/api.php
+  api_id_env: HOSTBILL_API_ID
+  api_key_env: HOSTBILL_API_KEY
