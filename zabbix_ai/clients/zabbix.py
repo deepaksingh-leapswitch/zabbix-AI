@@ -62,17 +62,23 @@ class ZabbixClient:
         return await self.call("problem.get", params)
 
     async def get_host(self, hostid: int) -> dict:
+        # Zabbix 7.x renamed selectGroups → selectHostGroups; response key
+        # is now `hostgroups`. We normalise back to `groups` so callers and
+        # tests don't have to track both naming schemes.
         rows = await self.call("host.get", {
             "hostids": [str(hostid)],
             "output": "extend",
-            "selectGroups": ["groupid", "name"],
+            "selectHostGroups": ["groupid", "name"],
             "selectInterfaces": ["ip", "dns", "type"],
             "selectInventory": "extend",
             "selectTags": ["tag", "value"],
         })
         if not rows:
             raise ZabbixError(f"no host found for hostid={hostid}")
-        return rows[0]
+        host = rows[0]
+        if "hostgroups" in host and "groups" not in host:
+            host["groups"] = host["hostgroups"]
+        return host
 
     async def get_history(self, hostid: int, keys: list[str], range_seconds: int = 3600) -> dict:
         items = await self.call("item.get", {

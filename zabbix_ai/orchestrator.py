@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import time
@@ -17,6 +18,28 @@ from zabbix_ai.prompts import SYSTEM_PROMPT, build_cached_system_blocks
 from zabbix_ai.tools import claude_tool_definitions, dispatch
 
 _log = logging.getLogger(__name__)
+
+
+def _parse_json_lenient(text: str) -> dict:
+    """json.loads, but tolerant of ```json … ``` fences and surrounding prose.
+
+    Haiku occasionally wraps its JSON in markdown despite "output ONLY"
+    instructions; we extract the first {...} block and parse that.
+    """
+    text = text.strip()
+    if text.startswith("```"):
+        # strip leading fence (with or without "json" tag) and trailing fence
+        first_nl = text.find("\n")
+        if first_nl > -1:
+            text = text[first_nl + 1:]
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3]
+    # last-ditch — find the first { and matching } pair
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        text = text[start: end + 1]
+    return json.loads(text)
 
 
 @dataclass
@@ -60,7 +83,51 @@ class Orchestrator:
         self.hostbill_client = hostbill_client
         self.scripts = scripts or {}
 
+    async def _enrich_context(self, ctx: InvestigationContext) -> None:
+        """Pre-fetch problem and host data so write-back can compute a stable
+        pattern signature. Mutates ctx in place. No-ops on failure — write-back
+        will silently skip if fields stay empty."""
+        if not ctx.instance or ctx.instance not in self.clients:
+            return
+        client = self.clients[ctx.instance]
+        if ctx.eventid and not ctx.problem_name:
+            try:
+                problem = await client.get_problem(ctx.eventid)
+            except Exception as e:
+                _log.debug("enrich: get_problem(%s) failed: %s", ctx.eventid, e)
+                problem = None
+            if problem:
+                ctx.problem_name = problem.get("name") or ""
+                hosts = problem.get("hosts") or []
+                if hosts and not ctx.hostid:
+                    with contextlib.suppress(KeyError, ValueError, TypeError):
+                        ctx.hostid = int(hosts[0]["hostid"])
+                if hosts and not ctx.hostname:
+                    ctx.hostname = hosts[0].get("host", "") or hosts[0].get("name", "")
+        if ctx.hostid and not ctx.hostgroup:
+            # Lightweight host.get — full get_host pulls inventory/interfaces/
+            # tags and can be slow on busy hosts; enrichment only needs the
+            # first hostgroup name.
+            try:
+                rows = await client.call("host.get", {
+                    "hostids": [str(ctx.hostid)],
+                    "output": ["host", "name"],
+                    "selectHostGroups": ["name"],
+                })
+            except Exception as e:
+                _log.debug("enrich: lightweight host.get(%s) failed: %s",
+                           ctx.hostid, e)
+                rows = []
+            if rows:
+                row = rows[0]
+                groups = row.get("hostgroups") or row.get("groups") or []
+                if groups:
+                    ctx.hostgroup = groups[0].get("name", "")
+                if not ctx.hostname:
+                    ctx.hostname = row.get("name") or row.get("host", "")
+
     async def investigate(self, ctx: InvestigationContext) -> InvestigationResult:
+        await self._enrich_context(ctx)
         start = time.monotonic()
         inv_id = await self.audit.log_start(
             source=ctx.source, instance=ctx.instance, eventid=ctx.eventid,
@@ -125,12 +192,15 @@ class Orchestrator:
             messages.append({"role": "user", "content": tool_results})
 
         duration_ms = int((time.monotonic() - start) * 1000)
+        # Run write-back before log_end so the computed pattern_signature
+        # lands in the investigations row in the same transaction window.
+        signature = await self._write_back(
+            ctx=ctx, investigation_id=inv_id, final_text=final_text,
+        )
         await self.audit.log_end(
             inv_id, summary=final_text, duration_ms=duration_ms,
             tokens_in=tokens_in, tokens_out=tokens_out,
-        )
-        signature = await self._write_back(
-            ctx=ctx, investigation_id=inv_id, final_text=final_text,
+            pattern_signature=signature,
         )
         return InvestigationResult(
             investigation_id=inv_id, summary=final_text,
@@ -169,7 +239,7 @@ class Orchestrator:
                 max_tokens=400,
             )
             text = self._extract_text(resp.content)
-            data = json.loads(text)
+            data = _parse_json_lenient(text)
             await upsert_pattern(
                 self.memory, signature=sig,
                 typical_root_cause=str(data.get("root_cause_short", "")),
@@ -221,6 +291,7 @@ class Orchestrator:
         Each yielded value is {"event": <str>, "data": <dict|str>}.
         Event kinds: started, tool_call, tool_result, thinking, final.
         """
+        await self._enrich_context(ctx)
         import time as _time
         start = _time.monotonic()
         inv_id = await self.audit.log_start(
@@ -309,12 +380,13 @@ class Orchestrator:
             messages.append({"role": "user", "content": tool_results})
 
         duration_ms = int((_time.monotonic() - start) * 1000)
+        signature = await self._write_back(
+            ctx=ctx, investigation_id=inv_id, final_text=final_text,
+        )
         await self.audit.log_end(
             inv_id, summary=final_text, duration_ms=duration_ms,
             tokens_in=tokens_in, tokens_out=tokens_out,
-        )
-        signature = await self._write_back(
-            ctx=ctx, investigation_id=inv_id, final_text=final_text,
+            pattern_signature=signature,
         )
         yield {"event": "final",
                "data": {"investigation_id": inv_id,
