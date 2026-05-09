@@ -137,3 +137,104 @@ class Orchestrator:
             if t == "text":
                 out.append(getattr(b, "text", ""))
         return "\n".join(out).strip()
+
+    async def investigate_streaming(self, ctx: InvestigationContext):
+        """Yield SSE-friendly events as the tool-use loop runs.
+
+        Each yielded value is {"event": <str>, "data": <dict|str>}.
+        Event kinds: started, tool_call, tool_result, thinking, final.
+        """
+        import time as _time
+        start = _time.monotonic()
+        inv_id = await self.audit.log_start(
+            source=ctx.source, instance=ctx.instance, eventid=ctx.eventid,
+            ticket_id=ctx.ticket_id, customer_id=ctx.customer_id,
+            hostid=ctx.hostid, hostname=ctx.hostname, model=self.model,
+        )
+        yield {"event": "started", "data": {"investigation_id": inv_id,
+                                             "model": self.model}}
+
+        system_blocks = build_cached_system_blocks(
+            SYSTEM_PROMPT, claude_tool_definitions(), ctx.host_inventory_summary,
+        )
+        messages: list[dict[str, Any]] = [
+            {"role": "user", "content": self._render_user_prompt(ctx)},
+        ]
+        tool_calls = 0
+        tokens_in = tokens_out = 0
+        final_text = ""
+        budget_exhausted = False
+
+        while True:
+            resp = await self.claude.create(
+                model=self.model, system=system_blocks,
+                tools=claude_tool_definitions(),
+                messages=messages, max_tokens=2048,
+            )
+            tokens_in += getattr(resp.usage, "input_tokens", 0) or 0
+            tokens_out += getattr(resp.usage, "output_tokens", 0) or 0
+
+            text_chunks = [getattr(b, "text", "") for b in resp.content
+                           if getattr(b, "type", None) == "text"]
+            if text_chunks:
+                yield {"event": "thinking",
+                       "data": {"text": "\n".join(text_chunks)}}
+
+            if resp.stop_reason == "end_turn" or budget_exhausted:
+                final_text = "\n".join(text_chunks).strip()
+                break
+
+            if tool_calls >= self.max_tool_calls:
+                messages.append({"role": "user",
+                                 "content": "Tool budget exhausted. "
+                                            "Produce final summary now."})
+                budget_exhausted = True
+                continue
+
+            messages.append({"role": "assistant", "content": resp.content})
+            tool_results = []
+            for block in resp.content:
+                if getattr(block, "type", None) != "tool_use":
+                    continue
+                tool_calls += 1
+                yield {"event": "tool_call",
+                       "data": {"name": block.name,
+                                "input": block.input or {},
+                                "tool_use_id": block.id}}
+                try:
+                    output = await dispatch(block.name, block.input or {},
+                                             context={"clients": self.clients,
+                                                      "investigation_id": inv_id})
+                    await self.audit.log_tool(inv_id, block.name,
+                                              block.input or {}, output)
+                    yield {"event": "tool_result",
+                           "data": {"tool_use_id": block.id,
+                                    "output": str(output)[:8000],
+                                    "is_error": False}}
+                    tool_results.append({"type": "tool_result",
+                                         "tool_use_id": block.id,
+                                         "content": str(output)[:8000]})
+                except Exception as e:
+                    msg = f"ERROR: {e}"
+                    await self.audit.log_tool(inv_id, block.name,
+                                              block.input or {}, msg)
+                    yield {"event": "tool_result",
+                           "data": {"tool_use_id": block.id,
+                                    "output": msg, "is_error": True}}
+                    tool_results.append({"type": "tool_result",
+                                         "tool_use_id": block.id,
+                                         "content": msg, "is_error": True})
+            messages.append({"role": "user", "content": tool_results})
+
+        duration_ms = int((_time.monotonic() - start) * 1000)
+        await self.audit.log_end(
+            inv_id, summary=final_text, duration_ms=duration_ms,
+            tokens_in=tokens_in, tokens_out=tokens_out,
+        )
+        yield {"event": "final",
+               "data": {"investigation_id": inv_id,
+                        "summary": final_text,
+                        "tool_calls": tool_calls,
+                        "tokens_in": tokens_in,
+                        "tokens_out": tokens_out,
+                        "duration_ms": duration_ms}}

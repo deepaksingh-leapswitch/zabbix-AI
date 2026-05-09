@@ -1,6 +1,6 @@
 [project]
 name = "zabbix-ai"
-version = "0.3.0"
+version = "0.4.0"
 description = "AI-assisted root-cause analysis for Zabbix monitoring"
 requires-python = ">=3.12"
 dependencies = [
@@ -12,6 +12,8 @@ dependencies = [
     "anthropic>=0.39",
     "pyyaml>=6.0",
     "structlog>=24.4",
+    "jinja2>=3.1",
+    "sse-starlette>=2.1",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +35,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["zabbix_ai"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"zabbix_ai/templates" = "zabbix_ai/templates"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

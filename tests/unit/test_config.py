@@ -143,3 +143,56 @@ sqlite_path: /tmp/x
     monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
     with pytest.raises(ValueError, match="SLACK_BOT_TOKEN"):
         load_settings(cfg)
+
+
+def test_zabbix_ui_settings_loaded(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("""
+zabbix_instances:
+  - name: monitoring
+    url: https://x.test
+    token_env: TOK
+zabbix_ui:
+  signing_key_env: URL_SIGNING_KEY
+  link_ttl_seconds: 600
+sqlite_path: /tmp/x
+""")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("TOK", "tok")
+    monkeypatch.setenv("URL_SIGNING_KEY", "this-is-a-32-byte-key-or-more-pls")
+    s = load_settings(cfg)
+    assert s.zabbix_ui is not None
+    assert s.zabbix_ui.signing_key.get_secret_value().startswith("this-is")
+    assert s.zabbix_ui.link_ttl_seconds == 600
+
+
+def test_zabbix_ui_section_optional(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("""
+zabbix_instances:
+  - name: monitoring
+    url: https://x.test
+    token_env: TOK
+sqlite_path: /tmp/x
+""")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("TOK", "tok")
+    assert load_settings(cfg).zabbix_ui is None
+
+
+def test_zabbix_ui_missing_key_env_raises(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("""
+zabbix_instances:
+  - name: monitoring
+    url: https://x.test
+    token_env: TOK
+zabbix_ui:
+  signing_key_env: NOPE_KEY
+sqlite_path: /tmp/x
+""")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("TOK", "tok")
+    monkeypatch.delenv("NOPE_KEY", raising=False)
+    with pytest.raises(ValueError, match="NOPE_KEY"):
+        load_settings(cfg)

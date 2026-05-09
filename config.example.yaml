@@ -25,3 +25,8 @@ slack:
   default_instance: monitoring         # used when the user does not specify one
   channel_allowlist:                    # only respond in these Slack channel IDs
     - C0123456789                       # replace with real channel IDs
+
+# Optional — enables the Zabbix UI right-click adapter.
+zabbix_ui:
+  signing_key_env: URL_SIGNING_KEY
+  link_ttl_seconds: 300        # how long a right-click URL is valid

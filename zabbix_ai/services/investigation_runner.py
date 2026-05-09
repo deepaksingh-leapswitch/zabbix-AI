@@ -61,3 +61,8 @@ class InvestigationRunner:
         if not self._orch:
             raise RuntimeError("InvestigationRunner not entered")
         return await self._orch.investigate(ctx)
+
+    def investigate_streaming(self, ctx: InvestigationContext):
+        if not self._orch:
+            raise RuntimeError("InvestigationRunner not entered")
+        return self._orch.investigate_streaming(ctx)

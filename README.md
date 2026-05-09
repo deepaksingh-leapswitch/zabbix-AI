@@ -53,6 +53,20 @@ To enable `@zabbix-ai` in Slack:
 6. Restart: `systemctl restart zabbix-ai`
 7. Invite the bot to your alert channel and mention it: `@zabbix-ai why is web-1 slow?`
 
+## Zabbix UI right-click (optional)
+
+To enable an "Investigate with AI" right-click on Zabbix problems:
+
+1. Generate a signing key (32+ bytes random) and add to `/etc/zabbix-ai/env`:
+   ```
+   URL_SIGNING_KEY=...
+   ```
+2. Add the `zabbix_ui:` section to `/etc/zabbix-ai/config.yaml`
+   (see `config.example.yaml`).
+3. Restart: `systemctl restart zabbix-ai`.
+4. Wire the Zabbix Frontend Script per
+   `deploy/zabbix-frontend-script.md`.
+
 ## Deploy agent UserParameters
 
 On every host you want diagnosable, copy `deploy/zabbix-agent/diag.conf`
@@ -76,7 +90,7 @@ pytest -v
 
 - v0.1+v0.2 (this branch) — CLI, orchestrator, ~15 read-only tools
 - v0.3 — Slack adapter ✓ (feat/v0.3-slack)
-- v0.4 — Zabbix UI right-click adapter
+- v0.4 — Zabbix UI right-click adapter ✓ (feat/v0.4-zabbix-ui)
 - v0.5 — Memory + pattern recognition + ticket history seeding
 - v0.6 — Forecasting / anomaly detection
 - v0.7 — Admin UI (auth, encrypted secret store)

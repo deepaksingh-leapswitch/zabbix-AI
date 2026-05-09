@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Zabbix RCA AI — investigation</title>
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif;
+           margin: 0; background: #0f1115; color: #e6e8ee; }
+    header { padding: 14px 20px; background: #1a1d24;
+             border-bottom: 1px solid #2a2f3a; }
+    header h1 { font-size: 16px; margin: 0 0 4px 0; }
+    header .meta { font-size: 12px; color: #8a93a6; }
+    main { padding: 16px 20px; max-width: 980px; }
+    .event { margin: 8px 0; padding: 10px 12px; background: #1a1d24;
+             border: 1px solid #2a2f3a; border-radius: 6px; font-size: 13px; }
+    .event h3 { margin: 0 0 6px 0; font-size: 12px; text-transform: uppercase;
+                letter-spacing: 0.04em; color: #8a93a6; }
+    .event pre { white-space: pre-wrap; margin: 0; font-size: 12px;
+                 color: #c8d0df; }
+    .event.tool_call { border-left: 3px solid #4f8cf7; }
+    .event.tool_result { border-left: 3px solid #6dd58c; }
+    .event.tool_result.error { border-left-color: #f78b8b; }
+    .event.final { border-left: 3px solid #ffba73;
+                   background: #1d2230; }
+    .event.thinking { color: #8a93a6; font-style: italic; }
+    .footer { font-size: 12px; color: #8a93a6;
+              padding: 14px 20px; border-top: 1px solid #2a2f3a; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🔎 Investigating event {{ eventid }}</h1>
+    <div class="meta">Instance: {{ instance }}</div>
+  </header>
+  <main id="events"></main>
+  <div class="footer">Read-only — the AI cannot modify state on any host.</div>
+  <script>
+    (function () {
+      const events = document.getElementById('events');
+      const src = new EventSource({{ sse_path | tojson }});
+
+      function append(kind, body) {
+        const div = document.createElement('div');
+        div.className = 'event ' + kind;
+        const h = document.createElement('h3');
+        h.textContent = kind.replace('_', ' ');
+        div.appendChild(h);
+        const pre = document.createElement('pre');
+        pre.textContent = body;
+        div.appendChild(pre);
+        events.appendChild(div);
+        window.scrollTo(0, document.body.scrollHeight);
+      }
+
+      ['started', 'tool_call', 'tool_result', 'thinking', 'final'].forEach(name => {
+        src.addEventListener(name, e => {
+          let body = e.data;
+          try {
+            const parsed = JSON.parse(e.data);
+            body = JSON.stringify(parsed, null, 2);
+            if (name === 'tool_result' && parsed.is_error) {
+              append(name + ' error', body);
+              return;
+            }
+          } catch (_) { /* keep as text */ }
+          append(name, body);
+        });
+      });
+
+      src.addEventListener('error', () => { src.close(); });
+      src.addEventListener('final', () => { src.close(); });
+    })();
+  </script>
+</body>
+</html>

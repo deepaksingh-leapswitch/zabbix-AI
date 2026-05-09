@@ -19,6 +19,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from zabbix_ai.adapters.slack import build_router
         app.include_router(build_router(settings))
 
+    if settings is not None and settings.zabbix_ui is not None:
+        from zabbix_ai.adapters.zabbix_ui import build_router as build_ui_router
+        app.include_router(build_ui_router(settings))
+
     return app
 
 

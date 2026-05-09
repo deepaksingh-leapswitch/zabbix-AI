@@ -28,6 +28,13 @@ class SlackSettings(BaseModel):
     signing_secret: SecretStr = SecretStr("")
 
 
+class ZabbixUiSettings(BaseModel):
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+    signing_key_env: str
+    link_ttl_seconds: int = 300
+    signing_key: SecretStr = SecretStr("")
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
@@ -41,6 +48,7 @@ class Settings(BaseModel):
     max_input_tokens: int = 50_000
     max_output_tokens: int = 10_000
     slack: SlackSettings | None = None
+    zabbix_ui: ZabbixUiSettings | None = None
 
 
 def load_settings(config_path: Path | str) -> Settings:
@@ -66,4 +74,9 @@ def load_settings(config_path: Path | str) -> Settings:
             raise ValueError(f"{s.slack.signing_secret_env} not set in environment")
         s.slack.bot_token = SecretStr(bot)
         s.slack.signing_secret = SecretStr(sec)
+    if s.zabbix_ui is not None:
+        key = os.environ.get(s.zabbix_ui.signing_key_env)
+        if not key:
+            raise ValueError(f"{s.zabbix_ui.signing_key_env} not set in environment")
+        s.zabbix_ui.signing_key = SecretStr(key)
     return s
