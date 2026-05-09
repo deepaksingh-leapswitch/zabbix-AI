@@ -1,0 +1,61 @@
+{% extends "admin/base.html" %}
+{% block title %}Investigations — Zabbix RCA AI{% endblock %}
+{% block content %}
+<h1>Investigations <span style="color:#8a93a6; font-size:13px; font-weight:400;">({{ total }} total)</span></h1>
+
+<form method="get" style="margin-bottom: 14px; display: flex; gap: 8px; flex-wrap: wrap;">
+  <input type="text" name="source" placeholder="source (cli/slack/zabbix_ui/hostbill)" value="{{ source }}" style="width: 240px;">
+  <input type="text" name="hostid" placeholder="hostid" value="{{ hostid }}" style="width: 120px;">
+  <button type="submit">Filter</button>
+  {% if source or hostid %}
+  <a href="/admin/investigations" style="padding: 6px 10px; font-size: 13px;">Clear</a>
+  {% endif %}
+</form>
+
+{% if rows %}
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Started</th>
+      <th>Source</th>
+      <th>Event ID</th>
+      <th>Host ID</th>
+      <th>Hostname</th>
+      <th>Model</th>
+      <th>Duration</th>
+      <th>Tokens</th>
+      <th>Summary</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for id, started, src, evid, hid, hname, model, dur, tok, summ in rows %}
+    <tr>
+      <td><a href="/admin/investigations/{{ id }}">{{ id }}</a></td>
+      <td style="white-space: nowrap;">{{ started[:19] if started else '—' }}</td>
+      <td>{{ src }}</td>
+      <td>{{ evid or '—' }}</td>
+      <td>{{ hid or '—' }}</td>
+      <td>{{ hname or '—' }}</td>
+      <td style="font-size: 11px;">{{ model or '—' }}</td>
+      <td>{{ dur or '—' }}{% if dur %}ms{% endif %}</td>
+      <td>{{ tok }}</td>
+      <td style="color: #8a93a6;">{{ summ }}{% if summ and summ|length == 80 %}…{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div style="margin-top: 12px; font-size: 13px; color: #8a93a6;">
+  Page {{ page }} of {{ total_pages }}
+  {% if page > 1 %}
+  · <a href="?page={{ page - 1 }}&source={{ source }}&hostid={{ hostid }}">← Prev</a>
+  {% endif %}
+  {% if page < total_pages %}
+  · <a href="?page={{ page + 1 }}&source={{ source }}&hostid={{ hostid }}">Next →</a>
+  {% endif %}
+</div>
+{% else %}
+<p style="color: #8a93a6;">No investigations found.</p>
+{% endif %}
+{% endblock %}

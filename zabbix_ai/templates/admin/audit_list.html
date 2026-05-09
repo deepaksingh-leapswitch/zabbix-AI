@@ -1,0 +1,67 @@
+{% extends "admin/base.html" %}
+{% block title %}Audit log — Zabbix RCA AI{% endblock %}
+{% block content %}
+<h1>Audit log <span style="color:#8a93a6; font-size:13px; font-weight:400;">({{ total }} entries)</span></h1>
+
+<form method="get" style="margin-bottom: 14px; display: flex; gap: 8px; flex-wrap: wrap;">
+  <input type="text" name="investigation_id" placeholder="investigation ID" value="{{ investigation_id }}" style="width: 140px;">
+  <select name="event_type" style="padding: 6px 10px; background: #0f1115; color: #e6e8ee; border: 1px solid #2a2f3a; border-radius: 4px;">
+    <option value="">All event types</option>
+    {% for et in event_types %}
+    <option value="{{ et }}"{% if et == event_type %} selected{% endif %}>{{ et }}</option>
+    {% endfor %}
+  </select>
+  <input type="text" name="since" placeholder="since (ISO date)" value="{{ since }}" style="width: 180px;">
+  <button type="submit">Filter</button>
+  {% if investigation_id or event_type or since %}
+  <a href="/admin/audit" style="padding: 6px 10px; font-size: 13px;">Clear</a>
+  {% endif %}
+</form>
+
+{% if rows %}
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Timestamp</th>
+      <th>Inv ID</th>
+      <th>Event type</th>
+      <th>Tool</th>
+      <th>Input (truncated)</th>
+      <th>User</th>
+      <th>Source</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for id, ts, inv_id, evtype, tname, tinput, uname, src in rows %}
+    <tr>
+      <td>{{ id }}</td>
+      <td style="white-space: nowrap; font-size: 11px;">{{ ts[:19] if ts else '' }}</td>
+      <td>
+        {% if inv_id %}
+        <a href="/admin/investigations/{{ inv_id }}">{{ inv_id }}</a>
+        {% else %}—{% endif %}
+      </td>
+      <td>{{ evtype }}</td>
+      <td>{{ tname or '—' }}</td>
+      <td style="font-size: 11px; color: #8a93a6; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ tinput or '' }}</td>
+      <td>{{ uname or '—' }}</td>
+      <td>{{ src or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div style="margin-top: 12px; font-size: 13px; color: #8a93a6;">
+  Page {{ page }} of {{ total_pages }}
+  {% if page > 1 %}
+  · <a href="?page={{ page - 1 }}&investigation_id={{ investigation_id }}&event_type={{ event_type }}&since={{ since }}">← Prev</a>
+  {% endif %}
+  {% if page < total_pages %}
+  · <a href="?page={{ page + 1 }}&investigation_id={{ investigation_id }}&event_type={{ event_type }}&since={{ since }}">Next →</a>
+  {% endif %}
+</div>
+{% else %}
+<p style="color: #8a93a6;">No audit log entries found.</p>
+{% endif %}
+{% endblock %}

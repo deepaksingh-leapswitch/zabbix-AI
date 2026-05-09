@@ -98,6 +98,29 @@ On every host you want diagnosable, copy `deploy/zabbix-agent/diag.conf`
 to `/etc/zabbix/zabbix_agentd.d/diag.conf` and restart the agent. This
 defines the read-only `diag.*` allowlist that the AI can call.
 
+## Admin UI (optional, v0.7+)
+
+Browser-accessible read-only views: dashboard, investigation history,
+audit log, learned patterns, host facts.
+
+1. Generate a session secret: `openssl rand -hex 32`
+2. Choose a temporary bootstrap admin password (used only on first start
+   to create the `admin` user; once that user enrols TOTP, this env var
+   is ignored — clear it for security).
+3. Add to `/etc/zabbix-ai/env`:
+   ```
+   SESSION_SECRET=<32 hex bytes>
+   BOOTSTRAP_ADMIN_PASSWORD=<temporary>
+   ```
+4. Add the `admin:` block to `/etc/zabbix-ai/config.yaml`.
+5. Restart the service. Open `https://your-host/admin/login`, sign in as
+   `admin`, and enrol TOTP (Google Authenticator, 1Password, etc.).
+6. **Clear `BOOTSTRAP_ADMIN_PASSWORD` from the env file** after first
+   login so it can't be reused.
+
+Connection management, user management, and pattern editing arrive in
+v0.7.1.
+
 ## Run a CLI investigation
 
 ```bash
@@ -118,7 +141,7 @@ pytest -v
 - v0.4 — Zabbix UI right-click adapter ✓ (feat/v0.4-zabbix-ui)
 - v0.5 — Memory + pattern recognition + HostBill live lookup ✓ (feat/v0.5-memory-hostbill)
 - v0.6 — Forecasting / anomaly detection
-- v0.7 — Admin UI (auth, encrypted secret store)
+- v0.7 — Admin UI MVP (auth, dashboard, history, audit, memory) ✓ (feat/v0.7-admin-ui)
 - v1.0 — GA
 - v1.1 — HostBill webhook + customer ticket flow
 - v1.2 — Optional auto-mode for Disaster severity

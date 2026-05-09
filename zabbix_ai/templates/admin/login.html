@@ -1,0 +1,22 @@
+{% extends "admin/base.html" %}
+{% block title %}Login — Zabbix RCA AI{% endblock %}
+{% block content %}
+<div class="card" style="max-width: 360px; margin: 60px auto;">
+  <h1>Sign in</h1>
+  <form method="post" action="/admin/login">
+    <div style="margin-bottom: 10px;">
+      <label style="display: block; font-size: 12px; color: #8a93a6; margin-bottom: 4px;">Username</label>
+      <input type="text" name="username" required autocomplete="username" style="width: 100%; box-sizing: border-box;">
+    </div>
+    <div style="margin-bottom: 10px;">
+      <label style="display: block; font-size: 12px; color: #8a93a6; margin-bottom: 4px;">Password</label>
+      <input type="password" name="password" required autocomplete="current-password" style="width: 100%; box-sizing: border-box;">
+    </div>
+    <div style="margin-bottom: 14px;">
+      <label style="display: block; font-size: 12px; color: #8a93a6; margin-bottom: 4px;">TOTP code (6 digits — leave blank on first login)</label>
+      <input type="text" name="totp_code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" style="width: 100%; box-sizing: border-box;">
+    </div>
+    <button type="submit" style="width: 100%;">Sign in</button>
+  </form>
+</div>
+{% endblock %}

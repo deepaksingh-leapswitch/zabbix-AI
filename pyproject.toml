@@ -1,6 +1,6 @@
 [project]
 name = "zabbix-ai"
-version = "0.5.0"
+version = "0.7.0"
 description = "AI-assisted root-cause analysis for Zabbix monitoring"
 requires-python = ">=3.12"
 dependencies = [
@@ -14,6 +14,10 @@ dependencies = [
     "structlog>=24.4",
     "jinja2>=3.1",
     "sse-starlette>=2.1",
+    "pyotp>=2.9",
+    "itsdangerous>=2.2",
+    "bcrypt>=4.2",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -53,3 +57,6 @@ select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[tool.ruff.lint.per-file-ignores]
+"zabbix_ai/admin/routes/*.py" = ["B008"]

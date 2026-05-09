@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -9,7 +10,27 @@ from zabbix_ai.config import Settings, load_settings
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    app = FastAPI(title="zabbix-ai", version=__version__)
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        if settings is not None and settings.admin is not None:
+            from pathlib import Path
+
+            from zabbix_ai.admin import setup_admin
+            from zabbix_ai.memory import Memory
+            mem = Memory(settings.sqlite_path)
+            await mem.connect()
+            await mem.run_migrations(
+                Path(__file__).resolve().parent.parent / "migrations"
+            )
+            await setup_admin(app, settings, mem)
+            try:
+                yield
+            finally:
+                await mem.close()
+        else:
+            yield
+
+    app = FastAPI(title="zabbix-ai", version=__version__, lifespan=lifespan)
 
     @app.get("/healthz")
     async def healthz() -> dict:

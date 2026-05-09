@@ -37,3 +37,9 @@ hostbill:
   api_url: https://billing.leapswitch.com/admin/api.php
   api_id_env: HOSTBILL_API_ID
   api_key_env: HOSTBILL_API_KEY
+
+# Optional — enables the browser-based admin UI at /admin.
+admin:
+  session_secret_env: SESSION_SECRET
+  bootstrap_admin_password_env: BOOTSTRAP_ADMIN_PASSWORD
+  session_max_age_seconds: 28800

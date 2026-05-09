@@ -44,6 +44,15 @@ class HostBillSettings(BaseModel):
     api_key: SecretStr = SecretStr("")
 
 
+class AdminSettings(BaseModel):
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+    session_secret_env: str
+    bootstrap_admin_password_env: str = ""  # only used on first start if no users exist
+    session_max_age_seconds: int = 28800   # 8h
+    session_secret: SecretStr = SecretStr("")
+    bootstrap_admin_password: SecretStr = SecretStr("")
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
@@ -59,6 +68,7 @@ class Settings(BaseModel):
     slack: SlackSettings | None = None
     zabbix_ui: ZabbixUiSettings | None = None
     hostbill: HostBillSettings | None = None
+    admin: AdminSettings | None = None
 
 
 def load_settings(config_path: Path | str) -> Settings:
@@ -98,4 +108,12 @@ def load_settings(config_path: Path | str) -> Settings:
             raise ValueError(f"{s.hostbill.api_key_env} not set in environment")
         s.hostbill.api_id = SecretStr(api_id)
         s.hostbill.api_key = SecretStr(api_key)
+    if s.admin is not None:
+        sec = os.environ.get(s.admin.session_secret_env)
+        if not sec:
+            raise ValueError(f"{s.admin.session_secret_env} not set in environment")
+        s.admin.session_secret = SecretStr(sec)
+        if s.admin.bootstrap_admin_password_env:
+            bap = os.environ.get(s.admin.bootstrap_admin_password_env, "")
+            s.admin.bootstrap_admin_password = SecretStr(bap)
     return s

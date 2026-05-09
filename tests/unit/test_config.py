@@ -255,3 +255,39 @@ sqlite_path: /tmp/x
     monkeypatch.delenv("NOPE_ID", raising=False)
     with pytest.raises(ValueError, match="NOPE_ID"):
         load_settings(cfg)
+
+
+def test_admin_settings_loaded(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("""
+zabbix_instances:
+  - name: monitoring
+    url: https://x.test
+    token_env: TOK
+admin:
+  session_secret_env: SESSION_SECRET
+  bootstrap_admin_password_env: BOOTSTRAP_ADMIN_PASSWORD
+sqlite_path: /tmp/x
+""")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("TOK", "tok")
+    monkeypatch.setenv("SESSION_SECRET", "32-bytes-of-random-secret-please")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", "first-time-pw")
+    s = load_settings(cfg)
+    assert s.admin is not None
+    assert s.admin.session_secret.get_secret_value().startswith("32-")
+    assert s.admin.bootstrap_admin_password.get_secret_value() == "first-time-pw"
+
+
+def test_admin_section_optional(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("""
+zabbix_instances:
+  - name: monitoring
+    url: https://x.test
+    token_env: TOK
+sqlite_path: /tmp/x
+""")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("TOK", "tok")
+    assert load_settings(cfg).admin is None

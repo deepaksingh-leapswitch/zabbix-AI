@@ -1,0 +1,52 @@
+{% extends "admin/base.html" %}
+{% block title %}Pattern {{ pattern.signature }} — Zabbix RCA AI{% endblock %}
+{% block content %}
+<h1>Pattern <code>{{ pattern.signature }}</code></h1>
+
+<div class="card">
+  <div style="display: flex; flex-wrap: wrap; gap: 12px;">
+    <div class="stat"><div class="v">{{ pattern.occurrences }}</div><div class="l">Occurrences</div></div>
+    <div class="stat"><div class="v">{{ pattern.confidence_score }}</div><div class="l">Confidence</div></div>
+    <div class="stat"><div class="v">{{ pattern.first_seen[:10] if pattern.first_seen else '—' }}</div><div class="l">First seen</div></div>
+    <div class="stat"><div class="v">{{ pattern.last_seen[:10] if pattern.last_seen else '—' }}</div><div class="l">Last seen</div></div>
+  </div>
+</div>
+
+{% if pattern.typical_root_cause %}
+<div class="card">
+  <h1>Typical root cause</h1>
+  <p style="font-size: 13px; white-space: pre-wrap;">{{ pattern.typical_root_cause }}</p>
+</div>
+{% endif %}
+
+{% if pattern.typical_fix %}
+<div class="card">
+  <h1>Typical fix</h1>
+  <p style="font-size: 13px; white-space: pre-wrap;">{{ pattern.typical_fix }}</p>
+</div>
+{% endif %}
+
+{% if inv_rows %}
+<div class="card">
+  <h1>Related investigations</h1>
+  <table>
+    <thead>
+      <tr><th>ID</th><th>Started</th><th>Source</th><th>Hostname</th><th>Confidence</th></tr>
+    </thead>
+    <tbody>
+      {% for id, started, src, hname, conf in inv_rows %}
+      <tr>
+        <td><a href="/admin/investigations/{{ id }}">{{ id }}</a></td>
+        <td style="white-space: nowrap; font-size: 11px;">{{ started[:19] if started else '—' }}</td>
+        <td>{{ src }}</td>
+        <td>{{ hname or '—' }}</td>
+        <td>{{ conf or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<p style="margin-top: 12px;"><a href="/admin/patterns">← Back to patterns</a></p>
+{% endblock %}

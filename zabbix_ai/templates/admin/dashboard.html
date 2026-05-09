@@ -1,0 +1,69 @@
+{% extends "admin/base.html" %}
+{% block title %}Dashboard — Zabbix RCA AI{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="card">
+  <div class="stat">
+    <div class="v">{{ inv_today }}</div>
+    <div class="l">Investigations today</div>
+  </div>
+  <div class="stat">
+    <div class="v">{{ inv_week }}</div>
+    <div class="l">Investigations this week</div>
+  </div>
+  <div class="stat">
+    <div class="v">{{ avg_duration_ms }}ms</div>
+    <div class="l">Avg duration today</div>
+  </div>
+  <div class="stat">
+    <div class="v">${{ cost_today }}</div>
+    <div class="l">Est. cost today</div>
+  </div>
+  <div class="stat">
+    <div class="v">{{ tokens_in_today + tokens_out_today }}</div>
+    <div class="l">Tokens today</div>
+  </div>
+</div>
+
+<div style="display: flex; gap: 16px; flex-wrap: wrap;">
+  <div class="card" style="flex: 1; min-width: 300px;">
+    <h1>Top hosts (by learned facts)</h1>
+    {% if top_hosts %}
+    <table>
+      <thead><tr><th>Host ID</th><th>Facts</th></tr></thead>
+      <tbody>
+        {% for hostid, cnt in top_hosts %}
+        <tr>
+          <td><a href="/admin/host-facts?hostid={{ hostid }}">{{ hostid }}</a></td>
+          <td>{{ cnt }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color: #8a93a6; font-size: 13px;">No host facts recorded yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="card" style="flex: 1; min-width: 300px;">
+    <h1>Top patterns (by occurrences)</h1>
+    {% if top_patterns %}
+    <table>
+      <thead><tr><th>Signature</th><th>Occurrences</th><th>Root cause</th></tr></thead>
+      <tbody>
+        {% for sig, occ, rc in top_patterns %}
+        <tr>
+          <td><a href="/admin/patterns/{{ sig }}">{{ sig }}</a></td>
+          <td>{{ occ }}</td>
+          <td>{{ (rc or '')[:60] }}{% if rc and rc|length > 60 %}…{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color: #8a93a6; font-size: 13px;">No patterns recorded yet.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

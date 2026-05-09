@@ -23,5 +23,8 @@ async def test_schema_created(memory):
 
 async def test_migrations_idempotent(memory):
     await memory.run_migrations(Path("migrations"))
-    rows = await memory.fetchall("SELECT version FROM schema_version")
-    assert rows == [(1,)]
+    rows = await memory.fetchall(
+        "SELECT version FROM schema_version ORDER BY version",
+    )
+    # Each migrations/NNN_*.sql file inserts its own version row.
+    assert rows == [(1,), (2,)]

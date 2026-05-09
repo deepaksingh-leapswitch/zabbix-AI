@@ -1,0 +1,68 @@
+{% extends "admin/base.html" %}
+{% block title %}Investigation #{{ inv.id }} — Zabbix RCA AI{% endblock %}
+{% block content %}
+<h1>Investigation #{{ inv.id }}</h1>
+
+<div class="card">
+  <div style="display: flex; flex-wrap: wrap; gap: 12px;">
+    <div class="stat"><div class="v">{{ inv.source }}</div><div class="l">Source</div></div>
+    <div class="stat"><div class="v">{{ inv.hostname or inv.hostid or '—' }}</div><div class="l">Host</div></div>
+    <div class="stat"><div class="v">{{ inv.duration_ms or '—' }}{% if inv.duration_ms %}ms{% endif %}</div><div class="l">Duration</div></div>
+    <div class="stat"><div class="v">{{ (inv.tokens_in or 0) + (inv.tokens_out or 0) }}</div><div class="l">Tokens</div></div>
+    <div class="stat"><div class="v">{{ inv.confidence or '—' }}</div><div class="l">Confidence</div></div>
+  </div>
+  <div style="margin-top: 10px; font-size: 12px; color: #8a93a6;">
+    Started: {{ inv.started_at }}
+    · Model: {{ inv.model or '—' }}
+    · Event ID: {{ inv.eventid or '—' }}
+    {% if inv.pattern_signature %}
+    · Pattern: <a href="/admin/patterns/{{ inv.pattern_signature }}">{{ inv.pattern_signature }}</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if inv.summary %}
+<div class="card">
+  <h1>Summary</h1>
+  <p style="font-size: 13px; white-space: pre-wrap;">{{ inv.summary }}</p>
+</div>
+{% endif %}
+
+{% if inv.root_cause %}
+<div class="card">
+  <h1>Root cause</h1>
+  <p style="font-size: 13px; white-space: pre-wrap;">{{ inv.root_cause }}</p>
+</div>
+{% endif %}
+
+{% if inv.suggested_actions %}
+<div class="card">
+  <h1>Suggested actions</h1>
+  <p style="font-size: 13px; white-space: pre-wrap;">{{ inv.suggested_actions }}</p>
+</div>
+{% endif %}
+
+{% if audit_rows %}
+<div class="card">
+  <h1>Tool transcript</h1>
+  <table>
+    <thead>
+      <tr><th>Timestamp</th><th>Event</th><th>Tool</th><th>Input</th><th>Output</th></tr>
+    </thead>
+    <tbody>
+      {% for ts, evtype, tname, tinput, toutput in audit_rows %}
+      <tr>
+        <td style="white-space: nowrap; font-size: 11px;">{{ ts[:19] if ts else '' }}</td>
+        <td>{{ evtype }}</td>
+        <td>{{ tname or '—' }}</td>
+        <td style="font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ tinput or '' }}</td>
+        <td style="font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ toutput or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<p style="margin-top: 12px;"><a href="/admin/investigations">← Back to list</a></p>
+{% endblock %}

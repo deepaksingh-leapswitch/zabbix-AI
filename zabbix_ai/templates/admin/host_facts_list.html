@@ -1,0 +1,50 @@
+{% extends "admin/base.html" %}
+{% block title %}Host facts — Zabbix RCA AI{% endblock %}
+{% block content %}
+<h1>Host facts <span style="color:#8a93a6; font-size:13px; font-weight:400;">({{ total }} total)</span></h1>
+
+<form method="get" style="margin-bottom: 14px; display: flex; gap: 8px; flex-wrap: wrap;">
+  <input type="text" name="hostid" placeholder="hostid" value="{{ hostid }}" style="width: 140px;">
+  <button type="submit">Filter</button>
+  {% if hostid %}
+  <a href="/admin/host-facts" style="padding: 6px 10px; font-size: 13px;">Clear</a>
+  {% endif %}
+</form>
+
+{% if rows %}
+<table>
+  <thead>
+    <tr>
+      <th>Host ID</th>
+      <th>Key</th>
+      <th>Value</th>
+      <th>Source investigation</th>
+      <th>Learned at</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for hid, key, value, src_inv, learned in rows %}
+    <tr>
+      <td><a href="/admin/host-facts?hostid={{ hid }}">{{ hid }}</a></td>
+      <td>{{ key }}</td>
+      <td style="font-size: 12px; color: #cdd3e0;">{{ value or '—' }}</td>
+      <td>
+        {% if src_inv %}
+        <a href="/admin/investigations/{{ src_inv }}">{{ src_inv }}</a>
+        {% else %}—{% endif %}
+      </td>
+      <td style="white-space: nowrap; font-size: 11px;">{{ learned[:19] if learned else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div style="margin-top: 12px; font-size: 13px; color: #8a93a6;">
+  Page {{ page }} of {{ total_pages }}
+  {% if page > 1 %}· <a href="?page={{ page - 1 }}&hostid={{ hostid }}">← Prev</a>{% endif %}
+  {% if page < total_pages %}· <a href="?page={{ page + 1 }}&hostid={{ hostid }}">Next →</a>{% endif %}
+</div>
+{% else %}
+<p style="color: #8a93a6;">No host facts found.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,40 @@
+{% extends "admin/base.html" %}
+{% block title %}Patterns — Zabbix RCA AI{% endblock %}
+{% block content %}
+<h1>Patterns <span style="color:#8a93a6; font-size:13px; font-weight:400;">({{ total }} total)</span></h1>
+
+{% if rows %}
+<table>
+  <thead>
+    <tr>
+      <th>Signature</th>
+      <th>Occurrences</th>
+      <th>First seen</th>
+      <th>Last seen</th>
+      <th>Typical root cause</th>
+      <th>Typical fix</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for sig, occ, first, last, rc, fix in rows %}
+    <tr>
+      <td><a href="/admin/patterns/{{ sig }}">{{ sig }}</a></td>
+      <td>{{ occ }}</td>
+      <td style="white-space: nowrap; font-size: 11px;">{{ first[:19] if first else '—' }}</td>
+      <td style="white-space: nowrap; font-size: 11px;">{{ last[:19] if last else '—' }}</td>
+      <td style="color: #8a93a6;">{{ rc }}{% if rc and rc|length == 80 %}…{% endif %}</td>
+      <td style="color: #8a93a6;">{{ fix }}{% if fix and fix|length == 80 %}…{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div style="margin-top: 12px; font-size: 13px; color: #8a93a6;">
+  Page {{ page }} of {{ total_pages }}
+  {% if page > 1 %}· <a href="?page={{ page - 1 }}">← Prev</a>{% endif %}
+  {% if page < total_pages %}· <a href="?page={{ page + 1 }}">Next →</a>{% endif %}
+</div>
+{% else %}
+<p style="color: #8a93a6;">No patterns recorded yet.</p>
+{% endif %}
+{% endblock %}
