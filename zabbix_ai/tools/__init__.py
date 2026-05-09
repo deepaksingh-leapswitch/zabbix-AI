@@ -18,9 +18,13 @@ def register(
     return decorator
 
 async def dispatch(name: str, args: dict[str, Any], *, context: dict[str, Any]) -> Any:
-    if name not in ALLOWED_TOOLS:
+    # Anthropic only accepts [a-zA-Z0-9_-] in tool names, so we translate dotted
+    # internal names (e.g. zabbix.get_problem) to "zabbix__get_problem" when
+    # advertising them and back here on dispatch.
+    canonical = name.replace("__", ".") if "__" in name and name not in ALLOWED_TOOLS else name
+    if canonical not in ALLOWED_TOOLS:
         raise KeyError(f"tool '{name}' not allowed")
-    fn = ALLOWED_TOOLS[name]
+    fn = ALLOWED_TOOLS[canonical]
     return await fn(**args, _ctx=context) if _accepts_ctx(fn) else await fn(**args)
 
 def _accepts_ctx(fn: ToolFunc) -> bool:
@@ -30,6 +34,8 @@ def _accepts_ctx(fn: ToolFunc) -> bool:
 
 def claude_tool_definitions() -> list[dict[str, Any]]:
     return [
-        {"name": name, "description": meta["description"], "input_schema": meta["input_schema"]}
+        {"name": name.replace(".", "__"),
+         "description": meta["description"],
+         "input_schema": meta["input_schema"]}
         for name, meta in _TOOL_META.items()
     ]

@@ -41,20 +41,20 @@ class ZabbixClient:
         return data["result"]
 
     async def get_problem(self, eventid: int) -> dict:
-        rows = await self.call("problem.get", {
+        # Zabbix 7.4 removed selectHosts/selectTags from problem.get; use event.get instead.
+        rows = await self.call("event.get", {
             "eventids": [str(eventid)],
             "output": "extend",
             "selectHosts": ["hostid", "host", "name"],
             "selectTags": ["tag", "value"],
-            "recent": "true",
         })
         if not rows:
-            raise ZabbixError(f"no problem found for eventid={eventid}")
+            raise ZabbixError(f"no event found for eventid={eventid}")
         return rows[0]
 
     async def get_open_problems(self, hostid: int | None = None,
                                 hostgroupid: int | None = None) -> list[dict]:
-        params: dict[str, Any] = {"output": "extend", "recent": "true"}
+        params: dict[str, Any] = {"output": "extend"}
         if hostid:
             params["hostids"] = [str(hostid)]
         if hostgroupid:
