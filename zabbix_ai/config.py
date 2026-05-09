@@ -35,6 +35,15 @@ class ZabbixUiSettings(BaseModel):
     signing_key: SecretStr = SecretStr("")
 
 
+class HostBillSettings(BaseModel):
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+    api_url: HttpUrl
+    api_id_env: str
+    api_key_env: str
+    api_id: SecretStr = SecretStr("")
+    api_key: SecretStr = SecretStr("")
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
@@ -49,6 +58,7 @@ class Settings(BaseModel):
     max_output_tokens: int = 10_000
     slack: SlackSettings | None = None
     zabbix_ui: ZabbixUiSettings | None = None
+    hostbill: HostBillSettings | None = None
 
 
 def load_settings(config_path: Path | str) -> Settings:
@@ -79,4 +89,13 @@ def load_settings(config_path: Path | str) -> Settings:
         if not key:
             raise ValueError(f"{s.zabbix_ui.signing_key_env} not set in environment")
         s.zabbix_ui.signing_key = SecretStr(key)
+    if s.hostbill is not None:
+        api_id = os.environ.get(s.hostbill.api_id_env)
+        if not api_id:
+            raise ValueError(f"{s.hostbill.api_id_env} not set in environment")
+        api_key = os.environ.get(s.hostbill.api_key_env)
+        if not api_key:
+            raise ValueError(f"{s.hostbill.api_key_env} not set in environment")
+        s.hostbill.api_id = SecretStr(api_id)
+        s.hostbill.api_key = SecretStr(api_key)
     return s

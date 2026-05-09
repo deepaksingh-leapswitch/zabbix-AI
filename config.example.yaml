@@ -30,3 +30,10 @@ slack:
 zabbix_ui:
   signing_key_env: URL_SIGNING_KEY
   link_ttl_seconds: 300        # how long a right-click URL is valid
+
+# Optional — enables HostBill ticket lookup as an investigation tool.
+# Leave commented out until you have an API user with read access to tickets.
+hostbill:
+  api_url: https://billing.leapswitch.com/admin/api.php
+  api_id_env: HOSTBILL_API_ID
+  api_key_env: HOSTBILL_API_KEY

@@ -67,6 +67,31 @@ To enable an "Investigate with AI" right-click on Zabbix problems:
 4. Wire the Zabbix Frontend Script per
    `deploy/zabbix-frontend-script.md`.
 
+## HostBill ticket lookup (optional)
+
+Once you have a HostBill admin API user with read access to tickets, the
+AI can search past closed tickets for similar customer issues.
+
+1. In HostBill admin: **Settings → API access** → create user with
+   permissions: `getTickets`, `getTicketDetails`, `getClientDetails`. Copy
+   the API ID and API key.
+2. Add to `/etc/zabbix-ai/env`:
+   ```
+   HOSTBILL_API_ID=...
+   HOSTBILL_API_KEY=...
+   ```
+3. Add the `hostbill:` section to `/etc/zabbix-ai/config.yaml`
+   (see `config.example.yaml`).
+4. Restart: `systemctl restart zabbix-ai`.
+
+When configured, the AI can call `memory.find_resolved_tickets("disk full")`
+during investigation. When not configured, that tool returns
+"HostBill not configured" and the investigation proceeds without it.
+
+Local memory (own past investigations + learned host facts + pattern
+table) works regardless and is filled automatically every time the AI
+runs. No CSV import is needed.
+
 ## Deploy agent UserParameters
 
 On every host you want diagnosable, copy `deploy/zabbix-agent/diag.conf`
@@ -91,7 +116,7 @@ pytest -v
 - v0.1+v0.2 (this branch) — CLI, orchestrator, ~15 read-only tools
 - v0.3 — Slack adapter ✓ (feat/v0.3-slack)
 - v0.4 — Zabbix UI right-click adapter ✓ (feat/v0.4-zabbix-ui)
-- v0.5 — Memory + pattern recognition + ticket history seeding
+- v0.5 — Memory + pattern recognition + HostBill live lookup ✓ (feat/v0.5-memory-hostbill)
 - v0.6 — Forecasting / anomaly detection
 - v0.7 — Admin UI (auth, encrypted secret store)
 - v1.0 — GA

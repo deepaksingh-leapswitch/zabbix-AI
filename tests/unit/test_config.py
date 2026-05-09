@@ -196,3 +196,62 @@ sqlite_path: /tmp/x
     monkeypatch.delenv("NOPE_KEY", raising=False)
     with pytest.raises(ValueError, match="NOPE_KEY"):
         load_settings(cfg)
+
+
+def test_hostbill_settings_loaded(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("""
+zabbix_instances:
+  - name: monitoring
+    url: https://x.test
+    token_env: TOK
+hostbill:
+  api_url: https://billing.test/admin/api.php
+  api_id_env: HOSTBILL_API_ID
+  api_key_env: HOSTBILL_API_KEY
+sqlite_path: /tmp/x
+""")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("TOK", "tok")
+    monkeypatch.setenv("HOSTBILL_API_ID", "id-1")
+    monkeypatch.setenv("HOSTBILL_API_KEY", "key-1")
+    s = load_settings(cfg)
+    assert s.hostbill is not None
+    assert s.hostbill.api_id.get_secret_value() == "id-1"
+    assert s.hostbill.api_key.get_secret_value() == "key-1"
+    assert str(s.hostbill.api_url).startswith("https://billing.test")
+
+
+def test_hostbill_section_optional(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("""
+zabbix_instances:
+  - name: monitoring
+    url: https://x.test
+    token_env: TOK
+sqlite_path: /tmp/x
+""")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("TOK", "tok")
+    assert load_settings(cfg).hostbill is None
+
+
+def test_hostbill_missing_api_id_env_raises(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("""
+zabbix_instances:
+  - name: monitoring
+    url: https://x.test
+    token_env: TOK
+hostbill:
+  api_url: https://billing.test/admin/api.php
+  api_id_env: NOPE_ID
+  api_key_env: HOSTBILL_API_KEY
+sqlite_path: /tmp/x
+""")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("TOK", "tok")
+    monkeypatch.setenv("HOSTBILL_API_KEY", "k")
+    monkeypatch.delenv("NOPE_ID", raising=False)
+    with pytest.raises(ValueError, match="NOPE_ID"):
+        load_settings(cfg)

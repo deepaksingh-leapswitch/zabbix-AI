@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import aiosqlite
@@ -55,3 +57,116 @@ class Memory:
         assert self._conn
         async with self._conn.execute(sql, params) as cur:
             return await cur.fetchone()
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def compute_pattern_signature(*, problem_name: str, hostgroup: str = "") -> str:
+    """Stable, lowercase, whitespace-collapsed hash of (problem, hostgroup).
+
+    Deterministic so re-occurrences of the same alert on the same kind of
+    host produce the same signature. Returns a hex string (16 chars) — short
+    enough to read in logs, wide enough for collisions to be ignorable at
+    the volume we expect (<<1M patterns).
+    """
+    norm = lambda s: re.sub(r"\s+", " ", (s or "").lower()).strip()  # noqa: E731
+    raw = f"{norm(problem_name)}|{norm(hostgroup)}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+async def write_investigation_summary(
+    memory: Memory, *, investigation_id: int,
+    summary: str = "", root_cause: str = "", suggested_actions: str = "",
+    confidence: str = "", pattern_signature: str = "",
+) -> None:
+    await memory.execute(
+        """UPDATE investigations
+           SET summary=?, root_cause=?, suggested_actions=?, confidence=?,
+               pattern_signature=?
+           WHERE id=?""",
+        (summary, root_cause, suggested_actions, confidence,
+         pattern_signature, investigation_id),
+    )
+
+
+async def upsert_host_facts(
+    memory: Memory, *, hostid: int, facts: dict[str, str],
+    source_investigation_id: int | None = None,
+) -> None:
+    ts = _now_iso()
+    for key, value in facts.items():
+        await memory.execute(
+            """INSERT INTO host_facts (hostid, key, value,
+                                        source_investigation_id, learned_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(hostid, key) DO UPDATE SET
+                 value=excluded.value,
+                 source_investigation_id=excluded.source_investigation_id,
+                 learned_at=excluded.learned_at""",
+            (hostid, key, value, source_investigation_id, ts),
+        )
+
+
+async def upsert_pattern(
+    memory: Memory, *, signature: str,
+    typical_root_cause: str = "", typical_fix: str = "",
+) -> None:
+    ts = _now_iso()
+    await memory.execute(
+        """INSERT INTO patterns (signature, first_seen, last_seen, occurrences,
+                                  typical_root_cause, typical_fix,
+                                  confidence_score)
+           VALUES (?, ?, ?, 1, ?, ?, 0.5)
+           ON CONFLICT(signature) DO UPDATE SET
+             last_seen=excluded.last_seen,
+             occurrences=patterns.occurrences + 1,
+             typical_root_cause=excluded.typical_root_cause,
+             typical_fix=excluded.typical_fix""",
+        (signature, ts, ts, typical_root_cause, typical_fix),
+    )
+
+
+async def find_similar_past_investigations(
+    memory: Memory, *, hostid: int | None,
+    pattern_signature: str | None, limit: int = 5,
+) -> list[dict]:
+    where = []
+    params: list = []
+    if hostid is not None:
+        where.append("hostid = ?")
+        params.append(hostid)
+    if pattern_signature:
+        where.append("pattern_signature = ?")
+        params.append(pattern_signature)
+    if not where:
+        return []
+    sql = (
+        "SELECT id, started_at, hostid, hostname, pattern_signature, "
+        "       summary, root_cause, confidence "
+        "FROM investigations "
+        f"WHERE {' AND '.join(where)} "
+        "ORDER BY id DESC LIMIT ?"
+    )
+    params.append(limit)
+    rows = await memory.fetchall(sql, tuple(params))
+    keys = ("id", "started_at", "hostid", "hostname", "pattern_signature",
+            "summary", "root_cause", "confidence")
+    return [dict(zip(keys, r, strict=False)) for r in rows]
+
+
+async def find_pattern(memory: Memory, *, signature: str) -> dict | None:
+    row = await memory.fetchone(
+        "SELECT signature, first_seen, last_seen, occurrences, "
+        "       typical_root_cause, typical_fix, confidence_score "
+        "FROM patterns WHERE signature=?",
+        (signature,),
+    )
+    if not row:
+        return None
+    return dict(zip(
+        ("signature", "first_seen", "last_seen", "occurrences",
+         "typical_root_cause", "typical_fix", "confidence_score"), row,
+        strict=False,
+    ))
