@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from zabbix_ai.audit import AuditLog
@@ -13,6 +14,7 @@ from zabbix_ai.orchestrator import (
     InvestigationResult,
     Orchestrator,
 )
+from zabbix_ai.services.script_bootstrap import ScriptIndex, ensure_diag_scripts
 from zabbix_ai.tools import diag as tools_diag
 from zabbix_ai.tools import lookup as tools_lookup
 from zabbix_ai.tools import memory as tools_memory
@@ -20,6 +22,7 @@ from zabbix_ai.tools import zabbix as tools_zabbix
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MIGRATIONS_DIR = _REPO_ROOT / "migrations"
+_log = logging.getLogger(__name__)
 
 class InvestigationRunner:
     def __init__(self, settings: Settings):
@@ -28,6 +31,7 @@ class InvestigationRunner:
         self._zabbix_clients: dict[str, ZabbixClient] = {}
         self._orch: Orchestrator | None = None
         self._hostbill: HostBillClient | None = None
+        self._scripts: dict[str, ScriptIndex] = {}
 
     async def __aenter__(self) -> InvestigationRunner:
         for inst in self.settings.zabbix_instances:
@@ -38,6 +42,17 @@ class InvestigationRunner:
         tools_diag.register_tools()
         tools_lookup.register_tools()
         tools_memory.register_tools()
+
+        # Ensure rca-ai.diag.* global scripts exist on every Zabbix instance.
+        # Best-effort: a transient API failure must not block service startup.
+        # Diag tools will fail at invocation time with a clear error if the
+        # script index is empty.
+        for name, client in self._zabbix_clients.items():
+            try:
+                self._scripts[name] = await ensure_diag_scripts(client)
+            except Exception as e:
+                _log.warning("script bootstrap failed for %s: %s", name, e)
+                self._scripts[name] = ScriptIndex()
 
         Path(self.settings.sqlite_path).parent.mkdir(parents=True, exist_ok=True)
         self._mem = Memory(self.settings.sqlite_path)
@@ -61,6 +76,7 @@ class InvestigationRunner:
             clients=self._zabbix_clients,
             memory=self._mem,
             hostbill_client=self._hostbill,
+            scripts=self._scripts,
         )
         return self
 

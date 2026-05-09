@@ -48,7 +48,8 @@ class Orchestrator:
     def __init__(self, *, claude, audit: AuditLog, model: str, summary_model: str,
                  max_tool_calls: int, clients: dict[str, Any],
                  memory: Memory | None = None,
-                 hostbill_client=None):
+                 hostbill_client=None,
+                 scripts: dict[str, Any] | None = None):
         self.claude = claude
         self.audit = audit
         self.model = model
@@ -57,6 +58,7 @@ class Orchestrator:
         self.clients = clients
         self.memory = memory
         self.hostbill_client = hostbill_client
+        self.scripts = scripts or {}
 
     async def investigate(self, ctx: InvestigationContext) -> InvestigationResult:
         start = time.monotonic()
@@ -107,6 +109,7 @@ class Orchestrator:
                                                  "investigation_id": inv_id,
                                                  "memory": self.memory,
                                                  "hostbill_client": self.hostbill_client,
+                                                 "scripts": self.scripts,
                                              })
                     await self.audit.log_tool(inv_id, block.name, block.input or {}, output)
                     tool_results.append({"type": "tool_result",
@@ -282,6 +285,7 @@ class Orchestrator:
                                                  "investigation_id": inv_id,
                                                  "memory": self.memory,
                                                  "hostbill_client": self.hostbill_client,
+                                                 "scripts": self.scripts,
                                              })
                     await self.audit.log_tool(inv_id, block.name,
                                               block.input or {}, output)
