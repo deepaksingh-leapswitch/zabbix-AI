@@ -11,7 +11,7 @@ class ZabbixError(Exception):
 
 
 class ZabbixClient:
-    def __init__(self, name: str, url: str, token: str, timeout: float = 15.0):
+    def __init__(self, name: str, url: str, token: str, timeout: float = 60.0):
         self.name = name
         self.url = url.rstrip("/") + "/api_jsonrpc.php"
         self.token = token

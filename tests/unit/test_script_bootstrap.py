@@ -32,7 +32,7 @@ def _make_client(existing: list[dict] | None = None,
         if method == "script.create":
             sid = next_ids.pop(0)
             return {"scriptids": [sid]}
-        if method == "script.delete":
+        if method in ("script.delete", "script.update"):
             return {}
         raise AssertionError(f"unexpected call {method}")
 
@@ -61,6 +61,20 @@ async def test_skips_existing_creates_missing():
                           next_ids=[str(800 + i) for i in range(n_to_create)])
     index = await ensure_diag_scripts(client)
     assert index.scriptid("diag.df", "linux") == "5"
+
+
+async def test_existing_scripts_updated_with_current_command():
+    existing = [{"scriptid": "5", "name": "diag.df",
+                 "menu_path": "zabbix-AI/Linux"}]
+    only = [DiagDef("diag.df", "x", linux="df --new-flag")]
+    client = _make_client(existing=existing, next_ids=[])
+    await ensure_diag_scripts(client, defs=only)
+    update_calls = [c for c in client.call.await_args_list
+                    if c.args[0] == "script.update"]
+    assert len(update_calls) == 1
+    p = update_calls[0].args[1]
+    assert p["scriptid"] == "5"
+    assert p["command"] == "df --new-flag"
 
 
 async def test_create_params_include_menu_path_and_30s_timeout():
@@ -122,4 +136,7 @@ async def test_snapshot_definition_present():
     assert snap.linux is not None
     assert snap.windows is not None
     assert "uptime" in snap.linux
-    assert "Get-PSDrive" in snap.windows
+    # Windows snapshot is base64-encoded for cmd.exe safety; verify the
+    # encoded wrapper is present.
+    assert "powershell" in snap.windows
+    assert "EncodedCommand" in snap.windows

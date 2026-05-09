@@ -14,6 +14,7 @@ with one round trip instead of seven.
 """
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field
 
 from zabbix_ai.clients.zabbix import ZabbixClient
@@ -22,6 +23,28 @@ _MENU_PATH_PREFIX = "zabbix-AI"
 _OS_DISPLAY = {"linux": "Linux", "windows": "Windows"}
 # Zabbix 7.4 caps script.create timeout at 30s; we reject larger values.
 _TIMEOUT = "30s"
+
+# Preamble applied to every Windows PowerShell script. Suppresses the
+# CLIXML progress-record noise that appears when PowerShell runs as a
+# child of cmd.exe and quietly drops non-fatal errors so the captured
+# stdout stays human-readable.
+_PS_PREAMBLE = (
+    "$ProgressPreference='SilentlyContinue';"
+    "$ErrorActionPreference='SilentlyContinue';"
+)
+
+
+def _ps_encoded(script: str) -> str:
+    """Wrap a PowerShell script as a cmd.exe-safe `-EncodedCommand` line.
+
+    Quote escaping when nesting PowerShell inside `cmd.exe /c "..."` (which
+    is what Zabbix system.run does on Windows) is fragile: long inline
+    commands break or time out. PowerShell's `-EncodedCommand` accepts a
+    base64-of-UTF-16LE blob and avoids all escaping issues.
+    """
+    full = _PS_PREAMBLE + script
+    encoded = base64.b64encode(full.encode("utf-16-le")).decode("ascii")
+    return f"powershell -NoProfile -OutputFormat Text -EncodedCommand {encoded}"
 
 # Linux multi-command snapshot — runs through /bin/sh on the agent.
 _LINUX_SNAPSHOT = (
@@ -34,32 +57,36 @@ _LINUX_SNAPSHOT = (
     "echo '=== dmesg tail 30 ==='; dmesg -T 2>/dev/null | tail -30"
 )
 
-# Windows snapshot — single PowerShell invocation. Agent on Windows runs
-# `system.run[]` via cmd.exe; we hand it `powershell -Command "..."`.
-_WINDOWS_SNAPSHOT = (
-    'powershell -NoProfile -Command "'
-    "Write-Output '=== uptime ==='; "
-    "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime; "
-    "Write-Output '=== drives ==='; "
-    "Get-PSDrive -PSProvider FileSystem | "
-    "Select Name,@{n='UsedGB';e={[math]::Round($_.Used/1GB,1)}},"
-    "@{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}} | Format-Table -AutoSize | Out-String; "
-    "Write-Output '=== memory ==='; "
-    "Get-CimInstance Win32_OperatingSystem | "
-    "Select TotalVisibleMemorySize,FreePhysicalMemory | Format-List | Out-String; "
-    "Write-Output '=== top processes by ws ==='; "
-    "Get-Process | Sort-Object WS -Desc | Select -First 20 "
-    "Name,Id,@{n='WS_MB';e={[math]::Round($_.WorkingSet/1MB,1)}} | "
-    "Format-Table -AutoSize | Out-String; "
-    "Write-Output '=== listening ports ==='; "
-    "Get-NetTCPConnection -State Listen 2>$null | "
-    "Select LocalAddress,LocalPort | Sort LocalPort | Select -First 20 | "
-    "Format-Table -AutoSize | Out-String; "
-    "Write-Output '=== latest 30 system errors ==='; "
-    "Get-EventLog System -EntryType Error,Warning -Newest 30 -EA SilentlyContinue | "
-    "Format-Table TimeGenerated,Source,Message -AutoSize | Out-String"
-    '"'
-)
+# Windows snapshot — multi-line PowerShell, encoded once at bootstrap time.
+_WINDOWS_SNAPSHOT_PS = """\
+Write-Output '=== uptime ==='
+$os = Get-CimInstance Win32_OperatingSystem
+$up = (Get-Date) - $os.LastBootUpTime
+"Up {0} days {1} hours, since {2}" -f $up.Days, $up.Hours, $os.LastBootUpTime
+Write-Output '=== drives ==='
+Get-PSDrive -PSProvider FileSystem | Select Name,
+  @{n='UsedGB';e={[math]::Round($_.Used/1GB,1)}},
+  @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}} |
+  Format-Table -AutoSize | Out-String
+Write-Output '=== memory ==='
+$mem = Get-CimInstance Win32_OperatingSystem
+"Total MB:    {0}" -f [math]::Round($mem.TotalVisibleMemorySize/1024)
+"Free MB:     {0}" -f [math]::Round($mem.FreePhysicalMemory/1024)
+"Total VM MB: {0}" -f [math]::Round($mem.TotalVirtualMemorySize/1024)
+"Free VM MB:  {0}" -f [math]::Round($mem.FreeVirtualMemory/1024)
+Write-Output '=== top processes by working set ==='
+Get-Process | Sort WS -Desc | Select -First 20 Name, Id,
+  @{n='WS_MB';e={[math]::Round($_.WorkingSet/1MB,1)}},
+  @{n='CPU_s';e={[math]::Round($_.CPU,1)}} |
+  Format-Table -AutoSize | Out-String
+Write-Output '=== listening ports (top 20) ==='
+Get-NetTCPConnection -State Listen | Select LocalAddress, LocalPort, OwningProcess |
+  Sort LocalPort | Select -First 20 | Format-Table -AutoSize | Out-String
+Write-Output '=== last 30 system errors/warnings ==='
+Get-EventLog System -EntryType Error, Warning -Newest 30 |
+  Format-Table TimeGenerated, EntryType, Source, EventID, Message -AutoSize | Out-String
+"""
+_WINDOWS_SNAPSHOT = _ps_encoded(_WINDOWS_SNAPSHOT_PS)
 
 
 @dataclass(frozen=True)
@@ -100,51 +127,67 @@ class DiagDef:
 DIAG_DEFINITIONS: list[DiagDef] = [
     DiagDef("diag.df", "Disk usage on the host.",
             linux="df -hP",
-            windows="powershell -NoProfile -Command \"Get-PSDrive -PSProvider FileSystem | "
-                    "Select Name,@{n='UsedGB';e={[math]::Round($_.Used/1GB,1)}},"
-                    "@{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}} | "
-                    "Format-Table -AutoSize | Out-String\""),
+            windows=_ps_encoded(
+                "Get-PSDrive -PSProvider FileSystem | Select Name,"
+                "@{n='UsedGB';e={[math]::Round($_.Used/1GB,1)}},"
+                "@{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}} | "
+                "Format-Table -AutoSize | Out-String",
+            )),
     DiagDef("diag.free", "Memory usage.",
             linux="free -m",
-            windows="powershell -NoProfile -Command \"Get-CimInstance Win32_OperatingSystem | "
-                    "Select TotalVisibleMemorySize,FreePhysicalMemory,TotalVirtualMemorySize,"
-                    "FreeVirtualMemory | Format-List | Out-String\""),
+            windows=_ps_encoded(
+                "$mem = Get-CimInstance Win32_OperatingSystem;"
+                "'Total MB:    {0}' -f [math]::Round($mem.TotalVisibleMemorySize/1024);"
+                "'Free MB:     {0}' -f [math]::Round($mem.FreePhysicalMemory/1024);"
+                "'Total VM MB: {0}' -f [math]::Round($mem.TotalVirtualMemorySize/1024);"
+                "'Free VM MB:  {0}' -f [math]::Round($mem.FreeVirtualMemory/1024)",
+            )),
     DiagDef("diag.uptime", "System uptime and load.",
             linux="uptime",
-            windows="powershell -NoProfile -Command \"$os = Get-CimInstance Win32_OperatingSystem; "
-                    "$up = (Get-Date) - $os.LastBootUpTime; "
-                    "'Up {0} days {1} hours, since {2}' -f "
-                    "$up.Days,$up.Hours,$os.LastBootUpTime\""),
+            windows=_ps_encoded(
+                "$os=Get-CimInstance Win32_OperatingSystem;"
+                "$up=(Get-Date)-$os.LastBootUpTime;"
+                "'Up {0} days {1} hours, since {2}' -f "
+                "$up.Days,$up.Hours,$os.LastBootUpTime",
+            )),
     DiagDef("diag.top", "Top CPU/memory processes.",
             linux="top -bn1 2>/dev/null | head -30",
-            windows="powershell -NoProfile -Command \"Get-Process | Sort WS -Desc | "
-                    "Select -First 30 Name,Id,"
-                    "@{n='WS_MB';e={[math]::Round($_.WorkingSet/1MB,1)}},"
-                    "@{n='CPU_s';e={[math]::Round($_.CPU,1)}} | "
-                    "Format-Table -AutoSize | Out-String\""),
+            windows=_ps_encoded(
+                "Get-Process | Sort WS -Desc | Select -First 30 Name,Id,"
+                "@{n='WS_MB';e={[math]::Round($_.WorkingSet/1MB,1)}},"
+                "@{n='CPU_s';e={[math]::Round($_.CPU,1)}} | "
+                "Format-Table -AutoSize | Out-String",
+            )),
     DiagDef("diag.dmesg_tail", "Recent kernel/system events.",
             linux="dmesg -T 2>/dev/null | tail -100",
-            windows="powershell -NoProfile -Command \"Get-EventLog System -Newest 100 "
-                    "-EA SilentlyContinue | Format-Table TimeGenerated,EntryType,Source,Message "
-                    "-AutoSize | Out-String\""),
+            windows=_ps_encoded(
+                "Get-EventLog System -Newest 100 | "
+                "Format-Table TimeGenerated,EntryType,Source,EventID,Message "
+                "-AutoSize | Out-String",
+            )),
     DiagDef("diag.ss_listen", "Listening sockets / TCP connections.",
             linux="ss -tunap 2>/dev/null",
-            windows="powershell -NoProfile -Command \"Get-NetTCPConnection -State Listen "
-                    "-EA SilentlyContinue | Select LocalAddress,LocalPort,OwningProcess | "
-                    "Sort LocalPort | Format-Table -AutoSize | Out-String\""),
+            windows=_ps_encoded(
+                "Get-NetTCPConnection -State Listen | "
+                "Select LocalAddress,LocalPort,OwningProcess | "
+                "Sort LocalPort | Format-Table -AutoSize | Out-String",
+            )),
     DiagDef("diag.ps_aux", "Process list sorted by memory, top 40.",
             linux="ps auxf --sort=-%mem 2>/dev/null | head -40",
-            windows="powershell -NoProfile -Command \"Get-Process | Sort WS -Desc | "
-                    "Select -First 40 Name,Id,@{n='WS_MB';e={[math]::Round($_.WorkingSet/1MB,1)}},"
-                    "Path | Format-Table -AutoSize | Out-String\""),
+            windows=_ps_encoded(
+                "Get-Process | Sort WS -Desc | Select -First 40 Name,Id,"
+                "@{n='WS_MB';e={[math]::Round($_.WorkingSet/1MB,1)}},Path | "
+                "Format-Table -AutoSize | Out-String",
+            )),
     DiagDef("diag.iostat",
             "I/O statistics (Linux: iostat; Windows: per-disk perf counters).",
             linux="iostat -xz 1 2 2>/dev/null",
-            windows="powershell -NoProfile -Command \"Get-Counter -Counter "
-                    "'\\PhysicalDisk(*)\\Disk Bytes/sec',"
-                    "'\\PhysicalDisk(*)\\Avg. Disk Queue Length' "
-                    "-MaxSamples 2 -EA SilentlyContinue | "
-                    "Format-List | Out-String\""),
+            windows=_ps_encoded(
+                "Get-Counter -Counter "
+                "'\\PhysicalDisk(*)\\Disk Bytes/sec',"
+                "'\\PhysicalDisk(*)\\Avg. Disk Queue Length' "
+                "-MaxSamples 2 | Format-List | Out-String",
+            )),
     DiagDef("diag.mysql_status", "MySQL server status (Linux only).",
             linux="mysqladmin --defaults-file=/etc/zabbix/.my.cnf status 2>/dev/null",
             windows=None),
@@ -155,11 +198,18 @@ DIAG_DEFINITIONS: list[DiagDef] = [
     DiagDef("diag.apache_status", "Apache server-status (Linux only).",
             linux="curl -s http://127.0.0.1/server-status?auto 2>/dev/null",
             windows=None),
+    # Manualinput-using Windows diags can't use _ps_encoded because Zabbix
+    # substitutes {MANUALINPUT} on the raw command string. The PowerShell
+    # validator regex constrains the input to safe characters, so the inline
+    # form is short enough to dodge escape problems.
     DiagDef("diag.systemctl_status",
             "systemctl status <unit> (Linux) / Get-Service status (Windows).",
             linux="systemctl status {MANUALINPUT} --no-pager 2>/dev/null",
-            windows="powershell -NoProfile -Command \"Get-Service '{MANUALINPUT}' "
-                    "-EA SilentlyContinue | Format-List Name,DisplayName,Status,StartType | "
+            windows="powershell -NoProfile -Command "
+                    "\"$ProgressPreference='SilentlyContinue';"
+                    "$ErrorActionPreference='SilentlyContinue';"
+                    "Get-Service '{MANUALINPUT}' | "
+                    "Format-List Name,DisplayName,Status,StartType | "
                     "Out-String\"",
             manualinput=True,
             manualinput_prompt="service / unit name",
@@ -168,9 +218,12 @@ DIAG_DEFINITIONS: list[DiagDef] = [
     DiagDef("diag.journal_tail",
             "Last N lines of journalctl (Linux) / system event log (Windows).",
             linux="journalctl -n {MANUALINPUT} --no-pager 2>/dev/null",
-            windows="powershell -NoProfile -Command \"Get-EventLog System -Newest "
-                    "{MANUALINPUT} -EA SilentlyContinue | "
-                    "Format-Table TimeGenerated,EntryType,Source,Message -AutoSize | Out-String\"",
+            windows="powershell -NoProfile -Command "
+                    "\"$ProgressPreference='SilentlyContinue';"
+                    "$ErrorActionPreference='SilentlyContinue';"
+                    "Get-EventLog System -Newest {MANUALINPUT} | "
+                    "Format-Table TimeGenerated,EntryType,Source,Message "
+                    "-AutoSize | Out-String\"",
             manualinput=True,
             manualinput_prompt="line count",
             manualinput_validator=r"^[1-9][0-9]{0,3}$",
@@ -268,10 +321,17 @@ async def ensure_diag_scripts(client: ZabbixClient,
         for os_kind in d.supported_os:
             mp = d.menu_path(os_kind)
             sid = have.get((d.name, mp))
+            params = _build_create_params(d, os_kind)
             if sid is None:
-                res = await client.call(
-                    "script.create", _build_create_params(d, os_kind),
-                )
+                res = await client.call("script.create", params)
                 sid = res["scriptids"][0]
+            else:
+                # Keep the script body in sync with the in-code definition so
+                # `command` / `manualinput*` updates propagate without manual
+                # cleanup. script.update accepts the same params plus scriptid.
+                update_params = {"scriptid": sid, **{
+                    k: v for k, v in params.items() if k != "name"
+                }}
+                await client.call("script.update", update_params)
             index.by_name.setdefault(d.name, {})[os_kind] = sid
     return index
