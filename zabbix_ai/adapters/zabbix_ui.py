@@ -29,11 +29,19 @@ def build_router(settings: Settings) -> APIRouter:
     @router.get("/investigate", response_class=HTMLResponse)
     async def page(token: str = "") -> HTMLResponse:
         payload = _verify(token)
-        eventid = payload.get("eventid", "")
+        eventid = payload.get("eventid")
+        hostid = payload.get("hostid")
         instance = payload.get("instance", "")
+        # Show whichever identifier we have. Both: prefer eventid (more specific).
+        if eventid is not None:
+            heading_id = f"event {eventid}"
+        elif hostid is not None:
+            heading_id = f"host {hostid}"
+        else:
+            heading_id = "(no event or host)"
         sse_path = f"/investigate/stream?token={token}"
         return HTMLResponse(render_investigate_page(
-            eventid=eventid, instance=instance, sse_path=sse_path,
+            eventid=heading_id, instance=instance, sse_path=sse_path,
         ))
 
     @router.get("/investigate/stream")
