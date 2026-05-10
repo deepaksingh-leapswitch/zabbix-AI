@@ -5,6 +5,7 @@
 <p><a href="/admin/connections">&larr; All connections</a></p>
 <div class="card" style="max-width:520px;">
   <form method="post" action="/admin/connections/hostbill/save">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div style="display:flex;flex-direction:column;gap:12px;">
       <div>
         <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">API URL</label>

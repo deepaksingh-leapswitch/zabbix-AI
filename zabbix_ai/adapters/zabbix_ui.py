@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import time
+from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from sse_starlette.sse import EventSourceResponse
 
@@ -12,6 +14,10 @@ from zabbix_ai.orchestrator import InvestigationContext
 from zabbix_ai.renderers.html import render_investigate_page
 from zabbix_ai.services.investigation_runner import InvestigationRunner
 from zabbix_ai.url_signing import UrlSignatureError, verify_url_token
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 def build_router(settings: Settings) -> APIRouter:
@@ -45,11 +51,34 @@ def build_router(settings: Settings) -> APIRouter:
         ))
 
     @router.get("/investigate/stream")
-    async def stream(token: str = "") -> EventSourceResponse:
+    async def stream(request: Request, token: str = "") -> EventSourceResponse:
         payload = _verify(token)
+        jti = payload.get("jti")
         eventid = payload.get("eventid")
         instance = payload.get("instance", "")
         hostid = payload.get("hostid")
+
+        # ── Single-use token enforcement (#2, #7) ────────────────────────────
+        # Use the shared app.state.memory (migrations already applied in
+        # lifespan). Falls back to a no-op if memory isn't configured.
+        mem = getattr(request.app.state, "memory", None)
+        if jti and mem is not None:
+            existing = await mem.fetchone(
+                "SELECT jti FROM used_tokens WHERE jti=?", (jti,)
+            )
+            if existing:
+                raise HTTPException(status_code=401, detail="token already used")
+            exp_ts = int(time.time()) + settings.zabbix_ui.link_ttl_seconds
+            exp_iso = datetime.fromtimestamp(exp_ts, UTC).isoformat()
+            await mem.execute(
+                "INSERT INTO used_tokens (jti, used_at, expires_at) VALUES (?,?,?)",
+                (jti, _now_iso(), exp_iso),
+            )
+            # Prune expired tokens opportunistically
+            await mem.execute(
+                "DELETE FROM used_tokens WHERE expires_at < ?",
+                (_now_iso(),),
+            )
 
         async def event_gen():
             async with InvestigationRunner(settings) as runner:

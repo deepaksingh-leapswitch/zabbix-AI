@@ -2,6 +2,50 @@
 
 All notable releases. Format follows [keepachangelog.com](https://keepachangelog.com/).
 
+## v1.3.1 — 2026-05-10
+
+**Security hardening release.** Addresses all 21 findings from the
+2026-05-10 security review (3 High, 6 Medium, 7 Low, 5 Informational).
+See `docs/SECURITY-FIXES-2026-05-10.md` for the full status table.
+
+### Highlights
+
+- **CSRF protection** (`admin/csrf.py`) — double-submit cookie middleware on
+  all admin POST routes. Forms render `{{ csrf_token }}`; logout is now POST.
+- **Single-use URL tokens** — investigation links signed with a `jti`,
+  consumed via the new `used_tokens` table (migration 005). Replaying a
+  link returns 401.
+- **Rate limiting** (`admin/rate_limit.py`) — slowapi `Limiter` on
+  `/admin/login`, `/admin/zabbix-link`, OAuth callback. `_real_ip` honours
+  `X-Forwarded-For` only from localhost.
+- **Operator role on `/admin/zabbix-link`** — viewers can no longer mint
+  investigation tokens (cost-amplification fix).
+- **Security headers middleware** — HSTS, CSP, X-Frame-Options,
+  X-Content-Type-Options, Referrer-Policy on every admin response.
+- **Admin audit log** (`admin_audit_log` table) — login/logout, conn
+  upserts, secret rotations, token issuance.
+- **TOTP replay-cache** — last code+timestamp stored per user; same code
+  in the same 30-second window is rejected.
+- **SSRF deny-list** on `/admin/connections/*` URL fields — rejects
+  loopback, RFC1918, link-local, and IPv6 ULA/link-local destinations.
+- **Self-hosted htmx** under `/static/htmx.min.js` (replaces unpkg CDN
+  dependency).
+- **Tightened `diag.systemctl_status` regex** — no whitespace allowed.
+- **Bootstrap-password retention warning** — startup log + 5-minute
+  background reminder if `BOOTSTRAP_ADMIN_PASSWORD` env var is still set
+  after admin users exist.
+
+### Migration
+
+- `migrations/005_security_hardening.sql` — adds `used_tokens`,
+  `admin_audit_log`, and `users.last_totp_code` / `users.last_totp_at`
+  columns. Idempotent on first run, gated by `schema_version`.
+
+### Tests
+
+- 234 tests, 0 failures, 0 lint errors.
+- New `tests/conftest.py` resets the slowapi limiter between tests.
+
 ## v1.3.0 — 2026-05-10
 
 **Host briefing pre-fetch** — structured Markdown block injected into the first

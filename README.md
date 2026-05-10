@@ -186,3 +186,4 @@ pytest -v
 - v1.1 — HostBill webhook + customer ticket flow
 - v1.2 — Optional auto-mode for Disaster severity
 - v1.3 — Host briefing pre-fetch (token-efficient correlation across 30-day metrics + history) ✓
+- v1.3.1 — Security hardening (CSRF, rate limit, single-use tokens, SSRF deny-list, audit log, TOTP replay-cache) ✓

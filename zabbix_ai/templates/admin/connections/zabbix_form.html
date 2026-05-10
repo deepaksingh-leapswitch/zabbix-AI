@@ -5,6 +5,7 @@
 <p><a href="/admin/connections/zabbix">&larr; Zabbix instances</a></p>
 <div class="card" style="max-width:520px;">
   <form method="post" action="/admin/connections/zabbix/save">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div style="display:flex;flex-direction:column;gap:12px;">
       <div>
         <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
@@ -56,6 +57,7 @@
                 style="background:#1a3a5a;">Test connection</button>
         <form method="post" action="/admin/connections/zabbix/{{ conn.name }}/delete"
               style="display:inline;" onsubmit="return confirm('Delete this instance?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button type="submit" style="background:#3a1a1a;color:#f78b8b;">Delete</button>
         </form>
         {% endif %}

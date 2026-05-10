@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import secrets
 import time
 from typing import Any
 
@@ -23,7 +24,14 @@ def _b64decode(s: str) -> bytes:
 
 def sign_url_token(payload: dict[str, Any], *, ttl_seconds: int,
                    signing_key: str) -> str:
-    """Return a token of the form: b64(payload_json).b64(exp).b64(hmac_sha256)."""
+    """Return a token of the form: b64(payload_json).b64(exp).b64(hmac_sha256).
+
+    The payload automatically gains a ``jti`` field (16-byte hex nonce) so
+    each token can be marked single-use on the server side (#2, #7).
+    """
+    payload = dict(payload)
+    if "jti" not in payload:
+        payload["jti"] = secrets.token_hex(16)
     exp = int(time.time()) + ttl_seconds
     payload_b = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     payload_part = _b64encode(payload_b)

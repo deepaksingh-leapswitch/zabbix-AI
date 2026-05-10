@@ -8,8 +8,8 @@ macros. From a host context (scope=2) only `{HOST.ID}` resolves and
 `{EVENT.ID}` is left as the literal string `{EVENT.ID}` (or empty,
 depending on Zabbix version). The endpoint must handle either case.
 
-We verify the user's admin session, build an HMAC-signed token, and
-303 to /investigate?token=… which streams the AI investigation.
+We verify the user's session (operator or above — #2), build an
+HMAC-signed single-use token, and 303 to /investigate?token=…
 """
 from __future__ import annotations
 
@@ -18,34 +18,36 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
+from zabbix_ai.admin.admin_audit import log_admin_event
 from zabbix_ai.admin.auth import login_required
+from zabbix_ai.admin.rate_limit import limiter
 from zabbix_ai.url_signing import sign_url_token
 
 router = APIRouter()
-_VIEWER_DEP = Depends(login_required("viewer"))
+
+# #2: Require at least operator role to mint investigation tokens.
+# Viewers can use the read-only admin UI but must not be able to trigger
+# Claude API calls (cost amplification risk).
+_OPERATOR_DEP = Depends(login_required("operator"))
 
 _INT_RE = re.compile(r"^\d+$")
 
 
 def _maybe_int(s: str | None) -> int | None:
-    """Parse a query param as int, returning None if absent or non-numeric.
-
-    Zabbix macros like `{EVENT.ID}` reach us as literal strings when
-    invoked from a context where the macro isn't in scope; we treat
-    those as missing rather than 400ing.
-    """
+    """Parse a query param as int, returning None if absent or non-numeric."""
     if not s or not _INT_RE.match(s):
         return None
     return int(s)
 
 
 @router.get("/admin/zabbix-link")
+@limiter.limit("10/minute")
 async def zabbix_link(
     request: Request,
     instance: str,
     eventid: str = "",
     hostid: str = "",
-    user: dict = _VIEWER_DEP,
+    user: dict = _OPERATOR_DEP,
 ) -> RedirectResponse:
     settings = request.app.state.settings
     if settings.zabbix_ui is None:
@@ -79,6 +81,17 @@ async def zabbix_link(
     signing_key = settings.zabbix_ui.signing_key.get_secret_value()
     ttl = settings.zabbix_ui.link_ttl_seconds
     token = sign_url_token(payload, ttl_seconds=ttl, signing_key=signing_key)
+
+    # #8: Audit token issuance
+    memory = request.app.state.memory
+    await log_admin_event(
+        memory,
+        event_type="token_issued",
+        by_user=user["username"],
+        target=instance,
+        details={"eventid": eid, "hostid": hid, "ttl": ttl},
+    )
+
     return RedirectResponse(
         url=f"/investigate?token={token}",
         status_code=303,

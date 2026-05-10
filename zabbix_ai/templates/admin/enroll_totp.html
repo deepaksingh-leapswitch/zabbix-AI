@@ -10,15 +10,12 @@
   <div style="text-align: center; margin: 16px 0;">
     <div style="width: 200px; margin: 0 auto;">{{ totp_qr_svg | safe }}</div>
   </div>
-  <p style="font-size: 12px; color: #8a93a6; word-break: break-all;">
-    Can't scan? Enter this secret manually:<br>
-    <code style="font-size: 13px; color: #e6e8ee;">{{ totp_secret }}</code>
-  </p>
   <p style="font-size: 12px; color: #8a93a6;">
-    Or copy the full provisioning URI:<br>
-    <code style="font-size: 11px; color: #cdd3e0; word-break: break-all;">{{ totp_uri }}</code>
+    If you cannot scan the QR code, please contact your administrator to reset
+    your TOTP enrolment. Do not share the QR code with others.
   </p>
   <form method="post" action="/admin/enroll-totp" style="margin-top: 16px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div style="margin-bottom: 10px;">
       <label style="display: block; font-size: 12px; color: #8a93a6; margin-bottom: 4px;">Confirm TOTP code</label>
       <input type="text" name="totp_code" inputmode="numeric" pattern="[0-9]*"

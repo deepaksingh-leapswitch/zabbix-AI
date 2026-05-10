@@ -19,7 +19,8 @@ async def test_schema_created(memory):
     names = {r[0] for r in rows}
     assert {"investigations", "host_facts", "patterns",
             "ticket_resolutions", "audit_log", "schema_version",
-            "secrets_kv", "connections"} <= names
+            "secrets_kv", "connections",
+            "used_tokens", "admin_audit_log"} <= names
 
 
 async def test_migrations_idempotent(memory):
@@ -28,4 +29,4 @@ async def test_migrations_idempotent(memory):
         "SELECT version FROM schema_version ORDER BY version",
     )
     # Each migrations/NNN_*.sql file inserts its own version row.
-    assert rows == [(1,), (2,), (3,), (4,)]
+    assert rows == [(1,), (2,), (3,), (4,), (5,)]

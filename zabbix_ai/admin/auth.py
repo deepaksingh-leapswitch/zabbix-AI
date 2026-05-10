@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -62,8 +63,19 @@ async def resolve_session(memory: Memory, *, signed_cookie: str,
         "UPDATE sessions SET last_seen_at=? WHERE sid=?",
         (_now().isoformat(), sid),
     )
+    # Probabilistic session cleanup — runs ~5% of requests (#15)
+    if random.random() < 0.05:
+        await _purge_expired_sessions(memory)
     return {"sid": sid, "user_id": user_id, "username": username,
             "role": role}
+
+
+async def _purge_expired_sessions(memory: Memory) -> None:
+    """Delete sessions that have passed their expires_at timestamp (#15)."""
+    await memory.execute(
+        "DELETE FROM sessions WHERE expires_at < ?",
+        (_now().isoformat(),),
+    )
 
 
 async def destroy_session(memory: Memory, sid: str) -> None:

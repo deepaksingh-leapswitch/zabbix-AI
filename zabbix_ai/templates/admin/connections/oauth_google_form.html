@@ -5,6 +5,7 @@
 <p><a href="/admin/connections">&larr; All connections</a></p>
 <div class="card" style="max-width:520px;">
   <form method="post" action="/admin/connections/oauth-google/save">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div style="display:flex;flex-direction:column;gap:12px;">
       <div>
         <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Client ID</label>
@@ -29,7 +30,7 @@
         <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Default role for new SSO users</label>
         <select name="default_role" style="padding:6px 10px;background:#0f1115;color:#e6e8ee;
                 border:1px solid #2a2f3a;border-radius:4px;">
-          {% for role in ["viewer", "operator", "admin"] %}
+          {% for role in ["viewer", "operator"] %}
           <option value="{{ role }}"
             {% if (conn and conn.config.get('default_role','viewer') == role) or (not conn and role == 'viewer') %}
             selected{% endif %}>{{ role }}</option>

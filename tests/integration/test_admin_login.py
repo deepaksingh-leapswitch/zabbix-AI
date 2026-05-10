@@ -108,8 +108,8 @@ def test_logout_clears_cookie(seeded):
         }, follow_redirects=False)
         assert "zai_session" in client.cookies
 
-        # logout
-        r = client.get("/admin/logout", follow_redirects=False)
+        # logout (now POST-only #1)
+        r = client.post("/admin/logout", follow_redirects=False)
         assert r.status_code == 303
         assert r.headers["location"] == "/admin/login"
         # session cookie should be cleared

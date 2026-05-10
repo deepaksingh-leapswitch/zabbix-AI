@@ -5,6 +5,7 @@ import hmac
 import json
 import re
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,6 +24,31 @@ class SlackSignatureError(Exception):
 
 
 _TIMESTAMP_TOLERANCE_SECONDS = 60 * 5  # 5 minutes per Slack docs
+
+# ── event_id dedupe cache (#10) ───────────────────────────────────────────────
+# LRU cache: keeps the most-recently-seen event IDs with their received timestamp.
+# Slack retries up to 3x; we dedupe within the timestamp tolerance window.
+_SEEN_EVENTS: OrderedDict[str, float] = OrderedDict()
+_SEEN_EVENTS_MAX = 10_000
+_DEDUPE_WINDOW_SECONDS = 60 * 10  # 10 minutes
+
+
+def _check_event_seen(event_id: str) -> bool:
+    """Return True if this event_id was already processed within the dedupe window."""
+    now = time.time()
+    # Prune expired entries
+    expired = [k for k, v in _SEEN_EVENTS.items() if now - v > _DEDUPE_WINDOW_SECONDS]
+    for k in expired:
+        _SEEN_EVENTS.pop(k, None)
+
+    if event_id in _SEEN_EVENTS:
+        return True
+
+    # Record new event
+    _SEEN_EVENTS[event_id] = now
+    if len(_SEEN_EVENTS) > _SEEN_EVENTS_MAX:
+        _SEEN_EVENTS.popitem(last=False)  # evict oldest
+    return False
 
 
 def verify_slack_signature(body: bytes, timestamp: str, signature: str,
@@ -64,15 +90,7 @@ class ParsedMention:
 def parse_mention(*, text: str, parent_text: str | None,
                   default_instance: str,
                   known_instances: list[str] | None = None) -> ParsedMention:
-    """Extract investigation context from a Slack mention.
-
-    Priority for eventid/hostid:
-      1. explicit key=value in the mention text
-      2. patterns in the parent alert message (if present)
-
-    Instance: explicit key=value, else default. Validation against
-    known_instances is the adapter's job, not this function's.
-    """
+    """Extract investigation context from a Slack mention."""
     cleaned = _MENTION_RE.sub("", text).strip()
     kv = {m.group(1).lower(): m.group(2) for m in _KEY_VALUE_RE.finditer(cleaned)}
     eventid = int(kv["eventid"]) if "eventid" in kv else None
@@ -125,6 +143,11 @@ def build_router(settings: Settings) -> APIRouter:
         if payload.get("type") != "event_callback":
             return JSONResponse({"ok": True})
 
+        # #10: Deduplicate by event_id (Slack retries)
+        event_id = payload.get("event_id", "")
+        if event_id and _check_event_seen(event_id):
+            return JSONResponse({"ok": True})
+
         event = payload.get("event") or {}
         if event.get("type") != "app_mention":
             return JSONResponse({"ok": True})
@@ -133,13 +156,6 @@ def build_router(settings: Settings) -> APIRouter:
         if allowed_channels and channel not in allowed_channels:
             return JSONResponse({"ok": True})
 
-        # Run the investigation in the foreground for the test, and in the
-        # background under uvicorn/production. The test client's TestClient
-        # synchronously waits for the response body, so background tasks would
-        # not run before the assertion. We therefore await directly here; for
-        # production this still returns inside Slack's 3-second window for
-        # short investigations and a placeholder is posted first to bridge the
-        # gap.
         await _handle_mention(
             event=event, channel=channel, settings=settings,
             bot_token=bot_token, default_instance=default_instance,

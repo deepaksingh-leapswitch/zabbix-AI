@@ -5,6 +5,7 @@
 <p><a href="/admin/connections">&larr; All connections</a></p>
 <div class="card" style="max-width:520px;">
   <form method="post" action="/admin/connections/zabbix-ui/save">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div style="display:flex;flex-direction:column;gap:12px;">
       <div>
         <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
@@ -15,7 +16,7 @@
       </div>
       <div>
         <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Link TTL (seconds)</label>
-        <input name="link_ttl_seconds" type="number" min="30" max="86400"
+        <input name="link_ttl_seconds" type="number" min="10" max="600"
                style="width:100%;box-sizing:border-box;"
                value="{{ conn.config.get('link_ttl_seconds', 300) if conn else 300 }}">
       </div>
@@ -27,6 +28,7 @@
   <form method="post" action="/admin/connections/zabbix-ui/regenerate-key"
         style="margin-top:12px;"
         onsubmit="return confirm('Generate and store a new random signing key? Old signed URLs will stop working.');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" style="background:#2a1a3a;color:#c98ef7;">
       Generate new random key
     </button>

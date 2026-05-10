@@ -1,16 +1,79 @@
 from __future__ import annotations
 
+import ipaddress
+import re
 import secrets
+import socket
+from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from zabbix_ai.admin import connections_store as cs
+from zabbix_ai.admin.admin_audit import log_admin_event
 from zabbix_ai.admin.auth import login_required
+from zabbix_ai.admin.csrf import get_csrf_token
 
 router = APIRouter()
 
+# ── SSRF protection (#19) ──────────────────────────────────────────────────────
+
+_PRIVATE_NETS = [
+    ipaddress.ip_network(n) for n in (
+        "127.0.0.0/8",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "169.254.0.0/16",  # link-local / AWS metadata
+        "::1/128",
+        "fc00::/7",         # ULA
+        "fe80::/10",        # link-local v6
+    )
+]
+
+
+def _validate_url(url: str) -> None:
+    """Reject private/loopback URLs to prevent SSRF (#19).
+
+    Raises HTTPException(400) if the URL resolves to a private address
+    or uses a non-http(s) scheme.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"URL scheme must be http or https, got '{parsed.scheme}'",
+        )
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(status_code=400, detail="URL has no hostname")
+
+    # Resolve hostname to IPs and check against deny-list
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except OSError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot resolve hostname '{hostname}': {e}",
+        ) from e
+
+    for info in infos:
+        addr_str = info[4][0]
+        try:
+            addr = ipaddress.ip_address(addr_str)
+        except ValueError:
+            continue
+        for net in _PRIVATE_NETS:
+            if addr in net:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(f"URL resolves to private/internal address {addr}"
+                            " — blocked for security"),
+                )
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 def _crypto_key(request: Request) -> bytes:
     return request.app.state.crypto_key
@@ -21,6 +84,7 @@ def _memory(request: Request):
 
 
 def _tmpl(request: Request, name: str, ctx: dict) -> HTMLResponse:
+    ctx.setdefault("csrf_token", get_csrf_token(request))
     return request.app.state.templates.TemplateResponse(request, name, ctx)
 
 
@@ -170,11 +234,8 @@ async def zabbix_save(
     name = name.strip()
     original_name = original_name.strip()
 
-    # Validate name (lowercase, alphanumeric + dash/underscore — fits in URLs
-    # and CLI args without quoting, and avoids the "instance=LS Zabbix" gotcha).
-    import re
+    # Validate name (lowercase, alphanumeric + dash/underscore)
     if not re.fullmatch(r"[a-zA-Z0-9_-]+", name):
-        # bounce back with the form re-rendered + a flash error
         return _tmpl(request, "admin/connections/zabbix_form.html", {
             "user": user, "active": "connections",
             "flashes": [{"kind": "err",
@@ -186,8 +247,20 @@ async def zabbix_save(
             "editing": bool(original_name),
         })
 
+    # #19: Validate URL for SSRF
+    try:
+        _validate_url(url)
+    except HTTPException as e:
+        return _tmpl(request, "admin/connections/zabbix_form.html", {
+            "user": user, "active": "connections",
+            "flashes": [{"kind": "err", "text": e.detail}],
+            "conn": {"name": original_name or name,
+                      "config": {"url": url},
+                      "enabled": (enabled == "on")},
+            "editing": bool(original_name),
+        })
+
     if original_name and original_name != name:
-        # Rename: re-key the secret + drop the old connection row
         old_token = await cs.secret_get(
             memory, key=f"zabbix:{original_name}:token",
             crypto_key=crypto_key,
@@ -195,7 +268,6 @@ async def zabbix_save(
         await cs.conn_delete(memory, type_="zabbix", name=original_name)
         await cs.secret_delete(memory, key=f"zabbix:{original_name}:token")
         if old_token and not token:
-            # Carry the existing token over to the new name unchanged.
             await cs.secret_set(
                 memory, key=f"zabbix:{name}:token",
                 value=old_token, crypto_key=crypto_key,
@@ -214,6 +286,18 @@ async def zabbix_save(
             value=token, crypto_key=crypto_key,
             updated_by=user["username"],
         )
+    await log_admin_event(
+        memory, event_type="conn_upsert",
+        by_user=user["username"],
+        target=f"zabbix:{name}",
+        details={"url": url},
+    )
+    if token:
+        await log_admin_event(
+            memory, event_type="secret_set",
+            by_user=user["username"],
+            target=f"zabbix:{name}:token",
+        )
     return RedirectResponse("/admin/connections/zabbix", status_code=303)
 
 
@@ -226,6 +310,11 @@ async def zabbix_delete(
     memory = _memory(request)
     await cs.conn_delete(memory, type_="zabbix", name=name)
     await cs.secret_delete(memory, key=f"zabbix:{name}:token")
+    await log_admin_event(
+        memory, event_type="conn_delete",
+        by_user=user["username"],
+        target=f"zabbix:{name}",
+    )
     return RedirectResponse("/admin/connections/zabbix", status_code=303)
 
 
@@ -287,6 +376,18 @@ async def hostbill_save(
 ) -> RedirectResponse:
     memory = _memory(request)
     crypto_key = _crypto_key(request)
+
+    # #19: Validate URL
+    try:
+        _validate_url(api_url)
+    except HTTPException as e:
+        conn = await cs.conn_get(memory, type_="hostbill", name="primary")
+        return _tmpl(request, "admin/connections/hostbill_form.html", {
+            "user": user, "active": "connections",
+            "flashes": [{"kind": "err", "text": e.detail}],
+            "conn": conn,
+        })
+
     await cs.conn_upsert(
         memory, type_="hostbill", name="primary",
         config={"api_url": api_url},
@@ -299,6 +400,18 @@ async def hostbill_save(
     if api_key:
         await cs.secret_set(memory, key="hostbill:primary:api_key", value=api_key,
                              crypto_key=crypto_key, updated_by=user["username"])
+    await log_admin_event(
+        memory, event_type="conn_upsert",
+        by_user=user["username"],
+        target="hostbill:primary",
+        details={"api_url": api_url},
+    )
+    if api_id or api_key:
+        await log_admin_event(
+            memory, event_type="secret_set",
+            by_user=user["username"],
+            target="hostbill:primary:credentials",
+        )
     return RedirectResponse("/admin/connections/hostbill", status_code=303)
 
 
@@ -376,6 +489,17 @@ async def slack_save(
         await cs.secret_set(memory, key="slack:primary:signing_secret",
                              value=signing_secret, crypto_key=crypto_key,
                              updated_by=user["username"])
+    await log_admin_event(
+        memory, event_type="conn_upsert",
+        by_user=user["username"],
+        target="slack:primary",
+    )
+    if bot_token or signing_secret:
+        await log_admin_event(
+            memory, event_type="secret_set",
+            by_user=user["username"],
+            target="slack:primary:credentials",
+        )
     return RedirectResponse("/admin/connections/slack", status_code=303)
 
 
@@ -436,6 +560,11 @@ async def anthropic_save(
     if api_key:
         await cs.secret_set(memory, key="anthropic:primary:api_key", value=api_key,
                              crypto_key=crypto_key, updated_by=user["username"])
+        await log_admin_event(
+            memory, event_type="secret_set",
+            by_user=user["username"],
+            target="anthropic:primary:api_key",
+        )
     return RedirectResponse("/admin/connections/anthropic", status_code=303)
 
 
@@ -478,6 +607,9 @@ async def anthropic_test(
 
 # ─── OAuth Google ─────────────────────────────────────────────────────────────
 
+_VALID_ROLES = {"viewer", "operator"}  # admin must be set by existing admin in user mgmt
+
+
 @router.get("/admin/connections/oauth-google", response_class=HTMLResponse)
 async def oauth_google_form(
     request: Request,
@@ -502,6 +634,15 @@ async def oauth_google_save(
 ) -> RedirectResponse:
     memory = _memory(request)
     crypto_key = _crypto_key(request)
+
+    # #5 / #14: Validate default_role server-side
+    if default_role not in _VALID_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid default_role '{default_role}'; "
+                   f"must be one of {sorted(_VALID_ROLES)}",
+        )
+
     await cs.conn_upsert(
         memory, type_="oauth_google", name="primary",
         config={
@@ -516,6 +657,18 @@ async def oauth_google_save(
         await cs.secret_set(memory, key="oauth_google:primary:client_secret",
                              value=client_secret, crypto_key=crypto_key,
                              updated_by=user["username"])
+    await log_admin_event(
+        memory, event_type="conn_upsert",
+        by_user=user["username"],
+        target="oauth_google:primary",
+        details={"client_id": client_id, "default_role": default_role},
+    )
+    if client_secret:
+        await log_admin_event(
+            memory, event_type="secret_set",
+            by_user=user["username"],
+            target="oauth_google:primary:client_secret",
+        )
     return RedirectResponse("/admin/connections/oauth-google", status_code=303)
 
 
@@ -546,6 +699,8 @@ async def zabbix_ui_save(
 ) -> RedirectResponse:
     memory = _memory(request)
     crypto_key = _crypto_key(request)
+    # Cap TTL at 600 s (#2)
+    link_ttl_seconds = max(10, min(600, link_ttl_seconds))
     await cs.conn_upsert(
         memory, type_="zabbix_ui", name="primary",
         config={"link_ttl_seconds": link_ttl_seconds},
@@ -555,6 +710,11 @@ async def zabbix_ui_save(
         await cs.secret_set(memory, key="zabbix_ui:primary:signing_key",
                              value=signing_key, crypto_key=crypto_key,
                              updated_by=user["username"])
+        await log_admin_event(
+            memory, event_type="secret_set",
+            by_user=user["username"],
+            target="zabbix_ui:primary:signing_key",
+        )
     return RedirectResponse("/admin/connections/zabbix-ui", status_code=303)
 
 
@@ -574,6 +734,12 @@ async def zabbix_ui_regenerate(
     await cs.secret_set(memory, key="zabbix_ui:primary:signing_key",
                          value=new_key, crypto_key=crypto_key,
                          updated_by=user["username"])
+    await log_admin_event(
+        memory, event_type="secret_set",
+        by_user=user["username"],
+        target="zabbix_ui:primary:signing_key",
+        details={"action": "regenerated"},
+    )
     return RedirectResponse("/admin/connections/zabbix-ui", status_code=303)
 
 
@@ -587,7 +753,6 @@ async def system_form(
     memory = _memory(request)
     conn = await cs.conn_get(memory, type_="system", name="defaults")
     settings = request.app.state.settings
-    # Pre-fill from DB if set, else from currently-loaded settings
     cfg = (conn or {}).get("config", {}) if conn else {}
     return _tmpl(request, "admin/connections/system_form.html", {
         "user": user, "flashes": [], "active": "connections",
@@ -603,7 +768,6 @@ async def system_form(
                 or settings.max_input_tokens,
             "max_output_tokens": cfg.get("max_output_tokens")
                 or settings.max_output_tokens,
-            # Host briefing — fall back to Settings defaults if not in DB
             "host_briefing_enabled": cfg.get(
                 "host_briefing_enabled",
                 settings.host_briefing.enabled,
@@ -640,7 +804,6 @@ async def system_save(
         "max_tool_calls": max(1, min(50, max_tool_calls)),
         "max_input_tokens": max(1000, min(200_000, max_input_tokens)),
         "max_output_tokens": max(256, min(64_000, max_output_tokens)),
-        # Host briefing — checkbox sends "on" when checked, empty string when not
         "host_briefing_enabled": host_briefing_enabled == "on",
         "host_briefing_days": max(1, min(365, host_briefing_days)),
         "host_briefing_max_tokens": max(500, min(10_000, host_briefing_max_tokens)),

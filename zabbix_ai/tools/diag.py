@@ -168,10 +168,12 @@ def register_tools() -> None:
     async def _systemctl(*, hostid: int, instance: str, unit: str,
                          _ctx: dict) -> str:
         # Defense in depth — the Zabbix script has a manualinput regex too.
-        cleaned = unit.replace("-", "").replace(".", "").replace("_", "") \
-            .replace("@", "").replace(" ", "")
-        if not cleaned.isalnum():
-            raise ValueError("invalid unit name")
+        # #18: Tightened regex — no space allowed (prevents arg injection).
+        import re as _re
+        if not _re.fullmatch(r"[a-zA-Z0-9._@-]{1,64}", unit):
+            raise ValueError(
+                "invalid unit name: must match ^[a-zA-Z0-9._@-]{1,64}$"
+            )
         return await _run_diag(
             _ctx, instance, hostid, "diag.systemctl_status", manualinput=unit,
         )

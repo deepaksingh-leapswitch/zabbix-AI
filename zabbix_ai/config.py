@@ -31,7 +31,7 @@ class SlackSettings(BaseModel):
 class ZabbixUiSettings(BaseModel):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
     signing_key_env: str
-    link_ttl_seconds: int = 300
+    link_ttl_seconds: int = Field(default=300, ge=10, le=600)
     signing_key: SecretStr = SecretStr("")
 
 

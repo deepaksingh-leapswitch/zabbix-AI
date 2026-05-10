@@ -12,6 +12,7 @@
     next investigation.
   </p>
   <form method="post" action="/admin/connections/system/save">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div style="display:flex;flex-direction:column;gap:14px;">
       <div>
         <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">

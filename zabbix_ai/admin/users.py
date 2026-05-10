@@ -33,6 +33,41 @@ def verify_totp(secret: str, code: str) -> bool:
     return pyotp.TOTP(secret).verify(code, valid_window=1)
 
 
+async def verify_totp_with_replay_check(
+    memory: Memory, user_id: int, secret: str, code: str
+) -> bool:
+    """Verify a TOTP code and reject replay within the same 30-s window (#16).
+
+    Returns True only if the code is valid AND it hasn't been used by this
+    user in the current (or immediately adjacent) TOTP window.
+    """
+    if not code or not verify_totp(secret, code):
+        return False
+
+    # Check if the same code was already used by this user recently (≤ 60 s)
+    row = await memory.fetchone(
+        "SELECT last_totp_code, last_totp_at FROM users WHERE id=?", (user_id,)
+    )
+    if row:
+        last_code, last_at = row
+        if last_code == code and last_at:
+            try:
+                last_dt = datetime.fromisoformat(last_at)
+                delta = (datetime.now(UTC) - last_dt).total_seconds()
+                if delta < 60:
+                    # Same code within 60 s window — reject replay
+                    return False
+            except ValueError:
+                pass
+
+    # Record this code as used
+    await memory.execute(
+        "UPDATE users SET last_totp_code=?, last_totp_at=? WHERE id=?",
+        (code, _now_iso(), user_id),
+    )
+    return True
+
+
 def totp_provisioning_uri(username: str, secret: str,
                           issuer: str = "Zabbix RCA AI") -> str:
     return pyotp.TOTP(secret).provisioning_uri(

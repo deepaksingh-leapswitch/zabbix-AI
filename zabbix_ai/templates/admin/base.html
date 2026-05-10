@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><title>{% block title %}Zabbix RCA AI{% endblock %}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+  <script src="/static/htmx.min.js"></script>
   <style>
     body { font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e8ee; }
     nav { background: #1a1d24; border-bottom: 1px solid #2a2f3a;
@@ -45,7 +45,11 @@
     <span class="right">
       Signed in as <strong>{{ user.username }}</strong>
       ({{ user.role }})
-      &middot; <a href="/admin/logout">Logout</a>
+      &middot; <form method="post" action="/admin/logout" style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" style="background:none;border:none;color:#4f8cf7;
+                cursor:pointer;font-size:inherit;padding:0">Logout</button>
+      </form>
     </span>
   </nav>
   {% endif %}

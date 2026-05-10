@@ -1,7 +1,9 @@
 """Integration tests for /admin/connections routes."""
 from __future__ import annotations
 
+import socket
 from pathlib import Path
+from unittest.mock import patch
 
 import pyotp
 import pytest
@@ -10,6 +12,12 @@ from fastapi.testclient import TestClient
 from zabbix_ai.admin import users
 from zabbix_ai.admin.crypto import derive_key
 from zabbix_ai.memory import Memory
+
+
+def _fake_resolve_public(host, port, *args, **kwargs):
+    """Pretend any test hostname resolves to a public IP (8.8.8.8) — keeps
+    the SSRF validator (#19) happy without hitting real DNS."""
+    return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 0))]
 
 SECRET = "test-session-secret-32-bytes-ok!"
 TTL = 3600
@@ -135,12 +143,14 @@ def test_zabbix_ui_form_returns_200(admin_client):
 
 
 def test_zabbix_save_and_list(admin_client):
-    r = admin_client.post(
-        "/admin/connections/zabbix/save",
-        data={"name": "prod", "url": "https://zabbix.example.com",
-              "token": "mytoken", "enabled": "on"},
-        follow_redirects=False,
-    )
+    with patch("zabbix_ai.admin.routes.connections.socket.getaddrinfo",
+               side_effect=_fake_resolve_public):
+        r = admin_client.post(
+            "/admin/connections/zabbix/save",
+            data={"name": "prod", "url": "https://zabbix.example.com",
+                  "token": "mytoken", "enabled": "on"},
+            follow_redirects=False,
+        )
     assert r.status_code == 303
     r2 = admin_client.get("/admin/connections/zabbix", follow_redirects=False)
     assert "prod" in r2.text

@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import secrets
+import warnings
 from urllib.parse import urlencode
 
-import httpx
-from authlib.jose import jwt
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import RedirectResponse
+# authlib.jose is deprecated; suppress the warning until we migrate to joserfc.
+# Tracked: migrate in v1.4 — see docs/SECURITY.md.
+warnings.filterwarnings("ignore", message="authlib.jose module is deprecated",
+                        category=DeprecationWarning)
 
-from zabbix_ai.admin import auth, users
+import httpx  # noqa: E402
+from authlib.jose import jwt  # noqa: E402
+from fastapi import APIRouter, HTTPException, Request  # noqa: E402
+from fastapi.responses import RedirectResponse  # noqa: E402
+
+from zabbix_ai.admin import auth, users  # noqa: E402
+from zabbix_ai.admin.admin_audit import log_admin_event  # noqa: E402
+from zabbix_ai.admin.rate_limit import limiter  # noqa: E402
 
 router = APIRouter()
 
@@ -16,6 +24,16 @@ router = APIRouter()
 _GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
 _GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"
 _GOOGLE_CERTS = "https://www.googleapis.com/oauth2/v3/certs"
+
+_VALID_ISS = {"accounts.google.com", "https://accounts.google.com"}
+
+
+def _real_ip(request: Request) -> str:
+    if request.client and request.client.host in ("127.0.0.1", "::1"):
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            return xff.split(",")[0].strip()
+    return request.client.host if request.client else ""
 
 
 @router.get("/admin/oauth/google/start")
@@ -46,15 +64,17 @@ async def start(request: Request) -> RedirectResponse:
     resp.set_cookie(
         "zai_oauth_pkce", cookie, max_age=600,
         httponly=True, secure=request.app.state.cookie_secure,
-        samesite="lax",
+        samesite="strict",
     )
     return resp
 
 
 @router.get("/admin/oauth/google/callback", name="oauth_google_callback")
+@limiter.limit("30/minute")
 async def callback(request: Request, code: str = "",
                    state: str = "") -> RedirectResponse:
     settings = request.app.state.settings
+    ip = _real_ip(request)
     if settings.oauth_google is None:
         raise HTTPException(status_code=503, detail="Google SSO not configured")
     secret = request.app.state.session_secret
@@ -90,6 +110,17 @@ async def callback(request: Request, code: str = "",
     # Authlib JWT verification with Google's JWKS
     claims = jwt.decode(id_token, jwks)
     claims.validate()
+
+    # #5: Validate iss claim explicitly
+    iss = claims.get("iss", "")
+    if iss not in _VALID_ISS:
+        memory = request.app.state.memory
+        await log_admin_event(
+            memory, event_type="oauth_callback_failure",
+            ip=ip, details={"reason": "invalid iss", "iss": iss},
+        )
+        raise HTTPException(status_code=400, detail="invalid token issuer")
+
     if claims.get("nonce") != stash.get("nonce"):
         raise HTTPException(status_code=400, detail="nonce mismatch")
     aud = claims.get("aud")
@@ -123,14 +154,19 @@ async def callback(request: Request, code: str = "",
     cookie = await auth.create_session(
         memory, user_id=user["id"], secret=secret, ttl_seconds=ttl,
         user_agent=request.headers.get("user-agent", ""),
-        ip=request.client.host if request.client else "",
+        ip=ip,
     )
     await users.update_last_login(memory, user["id"])
+    await log_admin_event(
+        memory, event_type="login_success",
+        by_user=user["username"], ip=ip,
+        details={"method": "google_sso"},
+    )
     resp = RedirectResponse(url="/admin", status_code=303)
     resp.set_cookie(
         "zai_session", cookie, max_age=ttl,
         httponly=True, secure=request.app.state.cookie_secure,
-        samesite="lax",
+        samesite="strict",
     )
     resp.delete_cookie("zai_oauth_pkce")
     return resp
