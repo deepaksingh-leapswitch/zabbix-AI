@@ -7,11 +7,26 @@
   <form method="post" action="/admin/connections/zabbix/save">
     <div style="display:flex;flex-direction:column;gap:12px;">
       <div>
-        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Instance name</label>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          Instance name
+          <span style="color:#5a6275;font-weight:400;">
+            (used in URLs and CLI — lowercase, no spaces; e.g. <code>monitoring</code>)
+          </span>
+        </label>
         <input name="name" type="text" style="width:100%;box-sizing:border-box;"
                value="{{ conn.name if conn else '' }}"
-               placeholder="e.g. monitoring" required
-               {% if editing %}readonly{% endif %}>
+               pattern="[A-Za-z0-9_-]+"
+               title="Letters, digits, '-' or '_' only — no spaces"
+               placeholder="e.g. monitoring" required>
+        {% if editing %}
+          <input type="hidden" name="original_name" value="{{ conn.name }}">
+          <p style="font-size:11px;color:#8a93a6;margin:4px 0 0 0;">
+            Renaming an instance re-keys its stored token and updates the
+            connections row. Anything pointing at the old name (e.g. the
+            Zabbix Frontend Script's <code>?instance=…</code> URL parameter)
+            must be updated to match.
+          </p>
+        {% endif %}
       </div>
       <div>
         <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Zabbix URL</label>

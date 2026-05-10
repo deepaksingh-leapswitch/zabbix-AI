@@ -112,4 +112,19 @@ async def overlay_settings(settings: Settings, memory: Memory,
                 signing_key_env="", link_ttl_seconds=300,
             )
         settings.zabbix_ui.signing_key = SecretStr(zui)
+
+    # Models & limits (singleton)
+    sysconn = await cs.conn_get(memory, type_="system", name="defaults")
+    if sysconn and sysconn["enabled"]:
+        cfg = sysconn["config"]
+        if cfg.get("default_model"):
+            settings.default_model = cfg["default_model"]
+        if cfg.get("summary_model"):
+            settings.summary_model = cfg["summary_model"]
+        if cfg.get("max_tool_calls"):
+            settings.max_tool_calls = int(cfg["max_tool_calls"])
+        if cfg.get("max_input_tokens"):
+            settings.max_input_tokens = int(cfg["max_input_tokens"])
+        if cfg.get("max_output_tokens"):
+            settings.max_output_tokens = int(cfg["max_output_tokens"])
     return settings

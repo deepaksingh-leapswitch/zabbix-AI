@@ -100,6 +100,15 @@ async def connections_overview(
                 else "not set"
             ),
         },
+        {
+            "type": "system",
+            "label": "Models & limits",
+            "href": "/admin/connections/system",
+            "configured": True,
+            "detail": f"reasoning: {settings.default_model} · "
+                      f"summary: {settings.summary_model} · "
+                      f"max tool calls: {settings.max_tool_calls}",
+        },
     ]
 
     return _tmpl(request, "admin/connections.html", {
@@ -151,12 +160,48 @@ async def zabbix_save(
     request: Request,
     user: dict = Depends(login_required("admin")),
     name: str = Form(...),
+    original_name: str = Form(""),
     url: str = Form(...),
     token: str = Form(""),
     enabled: str = Form("on"),
 ) -> RedirectResponse:
     memory = _memory(request)
     crypto_key = _crypto_key(request)
+    name = name.strip()
+    original_name = original_name.strip()
+
+    # Validate name (lowercase, alphanumeric + dash/underscore — fits in URLs
+    # and CLI args without quoting, and avoids the "instance=LS Zabbix" gotcha).
+    import re
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", name):
+        # bounce back with the form re-rendered + a flash error
+        return _tmpl(request, "admin/connections/zabbix_form.html", {
+            "user": user, "active": "connections",
+            "flashes": [{"kind": "err",
+                         "text": "Instance name must contain only "
+                                 "letters, digits, '-' or '_' (no spaces)."}],
+            "conn": {"name": original_name or name,
+                      "config": {"url": url},
+                      "enabled": (enabled == "on")},
+            "editing": bool(original_name),
+        })
+
+    if original_name and original_name != name:
+        # Rename: re-key the secret + drop the old connection row
+        old_token = await cs.secret_get(
+            memory, key=f"zabbix:{original_name}:token",
+            crypto_key=crypto_key,
+        )
+        await cs.conn_delete(memory, type_="zabbix", name=original_name)
+        await cs.secret_delete(memory, key=f"zabbix:{original_name}:token")
+        if old_token and not token:
+            # Carry the existing token over to the new name unchanged.
+            await cs.secret_set(
+                memory, key=f"zabbix:{name}:token",
+                value=old_token, crypto_key=crypto_key,
+                updated_by=user["username"],
+            )
+
     await cs.conn_upsert(
         memory, type_="zabbix", name=name,
         config={"url": url},
@@ -530,3 +575,58 @@ async def zabbix_ui_regenerate(
                          value=new_key, crypto_key=crypto_key,
                          updated_by=user["username"])
     return RedirectResponse("/admin/connections/zabbix-ui", status_code=303)
+
+
+# ─── Models & limits (singleton, type=system, name=defaults) ───────────────
+
+@router.get("/admin/connections/system", response_class=HTMLResponse)
+async def system_form(
+    request: Request,
+    user: dict = Depends(login_required("admin")),
+) -> HTMLResponse:
+    memory = _memory(request)
+    conn = await cs.conn_get(memory, type_="system", name="defaults")
+    settings = request.app.state.settings
+    # Pre-fill from DB if set, else from currently-loaded settings
+    cfg = (conn or {}).get("config", {}) if conn else {}
+    return _tmpl(request, "admin/connections/system_form.html", {
+        "user": user, "flashes": [], "active": "connections",
+        "conn": conn,
+        "current": {
+            "default_model": cfg.get("default_model")
+                or settings.default_model,
+            "summary_model": cfg.get("summary_model")
+                or settings.summary_model,
+            "max_tool_calls": cfg.get("max_tool_calls")
+                or settings.max_tool_calls,
+            "max_input_tokens": cfg.get("max_input_tokens")
+                or settings.max_input_tokens,
+            "max_output_tokens": cfg.get("max_output_tokens")
+                or settings.max_output_tokens,
+        },
+    })
+
+
+@router.post("/admin/connections/system/save")
+async def system_save(
+    request: Request,
+    user: dict = Depends(login_required("admin")),
+    default_model: str = Form(...),
+    summary_model: str = Form(...),
+    max_tool_calls: int = Form(...),
+    max_input_tokens: int = Form(...),
+    max_output_tokens: int = Form(...),
+) -> RedirectResponse:
+    memory = _memory(request)
+    config = {
+        "default_model": default_model.strip(),
+        "summary_model": summary_model.strip(),
+        "max_tool_calls": max(1, min(50, max_tool_calls)),
+        "max_input_tokens": max(1000, min(200_000, max_input_tokens)),
+        "max_output_tokens": max(256, min(64_000, max_output_tokens)),
+    }
+    await cs.conn_upsert(
+        memory, type_="system", name="defaults",
+        config=config, updated_by=user["username"],
+    )
+    return RedirectResponse("/admin/connections/system", status_code=303)

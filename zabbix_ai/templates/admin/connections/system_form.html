@@ -1,0 +1,72 @@
+{% extends "admin/base.html" %}
+{% block title %}Models & limits — Connections{% endblock %}
+{% block content %}
+<h1>Models &amp; limits</h1>
+<p><a href="/admin/connections">&larr; Connections</a></p>
+
+<div class="card" style="max-width:560px;">
+  <p style="font-size:13px;color:#8a93a6;margin-top:0;">
+    These settings control which Claude model the orchestrator uses, how
+    many tool calls a single investigation may make, and the per-call
+    token caps. Saving here writes to SQLite and takes effect on the
+    next investigation.
+  </p>
+  <form method="post" action="/admin/connections/system/save">
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          Main reasoning model
+          <span style="color:#5a6275;font-weight:400;">(used for the tool-use loop)</span>
+        </label>
+        <input name="default_model" type="text"
+               value="{{ current.default_model }}"
+               style="width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;"
+               required>
+        <p style="font-size:11px;color:#8a93a6;margin:4px 0 0 0;">
+          Recommended: <code>claude-sonnet-4-6</code> (default).
+          For cheaper/faster but lower-quality runs:
+          <code>claude-haiku-4-5-20251001</code>.
+          For hardest cases: <code>claude-opus-4-7</code>.
+        </p>
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          Summary model
+          <span style="color:#5a6275;font-weight:400;">(used for the cheap end-of-investigation write-back)</span>
+        </label>
+        <input name="summary_model" type="text"
+               value="{{ current.summary_model }}"
+               style="width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;"
+               required>
+        <p style="font-size:11px;color:#8a93a6;margin:4px 0 0 0;">
+          Recommended: <code>claude-haiku-4-5-20251001</code> — small JSON
+          extraction, doesn't need a heavy model.
+        </p>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+        <div>
+          <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Max tool calls</label>
+          <input name="max_tool_calls" type="number" min="1" max="50"
+                 value="{{ current.max_tool_calls }}"
+                 style="width:100%;box-sizing:border-box;" required>
+        </div>
+        <div>
+          <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Max input tokens</label>
+          <input name="max_input_tokens" type="number" min="1000" max="200000" step="1000"
+                 value="{{ current.max_input_tokens }}"
+                 style="width:100%;box-sizing:border-box;" required>
+        </div>
+        <div>
+          <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Max output tokens</label>
+          <input name="max_output_tokens" type="number" min="256" max="64000" step="256"
+                 value="{{ current.max_output_tokens }}"
+                 style="width:100%;box-sizing:border-box;" required>
+        </div>
+      </div>
+      <div>
+        <button type="submit">Save</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}
