@@ -185,3 +185,4 @@ pytest -v
 - v1.0 — GA ✓ (deployed at https://zabbix-ai.lsnw.io/)
 - v1.1 — HostBill webhook + customer ticket flow
 - v1.2 — Optional auto-mode for Disaster severity
+- v1.3 — Host briefing pre-fetch (token-efficient correlation across 30-day metrics + history) ✓

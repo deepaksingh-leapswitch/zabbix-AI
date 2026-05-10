@@ -2,6 +2,50 @@
 
 All notable releases. Format follows [keepachangelog.com](https://keepachangelog.com/).
 
+## v1.3.0 — 2026-05-10
+
+**Host briefing pre-fetch** — structured Markdown block injected into the first
+user message when a `hostid` is known, eliminating redundant discovery tool calls.
+
+### What ships
+
+- **`zabbix_ai/services/host_briefing.py`** — new `build_host_briefing` async
+  function. Parallel Zabbix API fetches (host, open problems, 30-day event
+  history, per-metric item lookup + history). Renders up to 7 sections:
+  host header, open problems, 30-day problem history (deduped against open
+  problems), metric trends table (CPU/mem/disk/load), 90-day forecast hits,
+  past investigations from memory, and matching pattern signatures.
+- **Token-efficient metric detection** — tries Linux or Windows key candidates
+  in order; inverts "free %" keys (`pavailable`, `used,pfree`) so every column
+  reads "% used". Warns with ⚠ if metric ≥ 85% or growing > 1%/day.
+- **Soft token cap** — drops sections in priority order (forecast → past
+  investigations → patterns → history) until the briefing fits within
+  `host_briefing_max_tokens` (default 2000).
+- **`HostBriefingSettings`** Pydantic model added to `config.py`; plumbed
+  through `Settings.host_briefing`.
+- **Admin UI** — three new fields on the Models & limits form: enabled
+  checkbox, history days, and max tokens. Saved to `system/defaults` DB
+  row; `config_overlay.py` applies them on each investigation.
+- **Orchestrator** — accepts optional `host_briefing_config` dict; calls
+  `build_host_briefing` after existing enrichment; stores result in
+  `ctx.briefing_md`; `_render_user_prompt` prepends it.
+- **`InvestigationContext`** gains `briefing_md: str = ""` field.
+- **System prompt** updated to instruct the model to use the briefing first
+  and skip redundant `zabbix.get_host` / `zabbix.get_open_problems` calls;
+  also tightened the "be terse" instruction.
+- **Tests** — `tests/unit/test_host_briefing.py` (7 cases) and three new
+  overlay tests in `test_config_overlay.py`.
+
+### Estimated token saving
+
+Typical host with 3 open problems, 47 events in 30 days, 3 matching metrics:
+- Briefing ≈ 1 400 tokens (pre-fetched once)
+- Equivalent tool calls avoided: `get_host` (~800), `get_open_problems` (~600),
+  `event.get` 30d scan (~3 000), `item.get × 4` (~800), `history.get × 4` (~1 600)
+- **Net saving ≈ 6 300 input tokens** on the first turn; cache hit on system
+  blocks saves a further ~1 200 tokens on re-investigations of the same host
+  within the 5-minute cache TTL.
+
 ## v1.2.0 — 2026-05-10
 
 - **Connection management UI** at `/admin/connections`. Admin role can

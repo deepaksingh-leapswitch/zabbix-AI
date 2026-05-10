@@ -92,6 +92,7 @@ class InvestigationRunner:
             )
 
         claude = ClaudeClient(api_key=self.settings.anthropic_api_key.get_secret_value())
+        hb_cfg = self.settings.host_briefing
         self._orch = Orchestrator(
             claude=claude,
             audit=AuditLog(self._mem),
@@ -102,6 +103,11 @@ class InvestigationRunner:
             memory=self._mem,
             hostbill_client=self._hostbill,
             scripts=self._scripts,
+            host_briefing_config={
+                "enabled": hb_cfg.enabled,
+                "days": hb_cfg.days,
+                "max_tokens": hb_cfg.max_tokens,
+            },
         )
         return self
 

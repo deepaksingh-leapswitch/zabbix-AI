@@ -603,6 +603,19 @@ async def system_form(
                 or settings.max_input_tokens,
             "max_output_tokens": cfg.get("max_output_tokens")
                 or settings.max_output_tokens,
+            # Host briefing — fall back to Settings defaults if not in DB
+            "host_briefing_enabled": cfg.get(
+                "host_briefing_enabled",
+                settings.host_briefing.enabled,
+            ),
+            "host_briefing_days": cfg.get(
+                "host_briefing_days",
+                settings.host_briefing.days,
+            ),
+            "host_briefing_max_tokens": cfg.get(
+                "host_briefing_max_tokens",
+                settings.host_briefing.max_tokens,
+            ),
         },
     })
 
@@ -616,6 +629,9 @@ async def system_save(
     max_tool_calls: int = Form(...),
     max_input_tokens: int = Form(...),
     max_output_tokens: int = Form(...),
+    host_briefing_enabled: str = Form(""),
+    host_briefing_days: int = Form(30),
+    host_briefing_max_tokens: int = Form(2000),
 ) -> RedirectResponse:
     memory = _memory(request)
     config = {
@@ -624,6 +640,10 @@ async def system_save(
         "max_tool_calls": max(1, min(50, max_tool_calls)),
         "max_input_tokens": max(1000, min(200_000, max_input_tokens)),
         "max_output_tokens": max(256, min(64_000, max_output_tokens)),
+        # Host briefing — checkbox sends "on" when checked, empty string when not
+        "host_briefing_enabled": host_briefing_enabled == "on",
+        "host_briefing_days": max(1, min(365, host_briefing_days)),
+        "host_briefing_max_tokens": max(500, min(10_000, host_briefing_max_tokens)),
     }
     await cs.conn_upsert(
         memory, type_="system", name="defaults",

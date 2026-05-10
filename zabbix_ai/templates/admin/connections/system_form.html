@@ -63,6 +63,50 @@
                  style="width:100%;box-sizing:border-box;" required>
         </div>
       </div>
+      <hr style="border:none;border-top:1px solid #2a3042;margin:6px 0;">
+      <p style="font-size:12px;color:#8a93a6;margin:0 0 8px 0;font-weight:600;">
+        Host briefing (pre-fetch)
+      </p>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div>
+          <label style="font-size:12px;color:#8a93a6;display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input name="host_briefing_enabled" type="checkbox"
+                   {% if current.host_briefing_enabled %}checked{% endif %}>
+            Host briefing enabled
+          </label>
+          <p style="font-size:11px;color:#8a93a6;margin:4px 0 0 0;">
+            When enabled, the orchestrator pre-fetches a structured Markdown
+            briefing (open problems, 30-day metric trends, past investigations)
+            and injects it into the first user message before the AI's first
+            turn. Saves ~5–10 K input tokens per investigation.
+          </p>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div>
+            <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+              History days
+            </label>
+            <input name="host_briefing_days" type="number" min="1" max="365"
+                   value="{{ current.host_briefing_days }}"
+                   style="width:100%;box-sizing:border-box;">
+            <p style="font-size:11px;color:#8a93a6;margin:4px 0 0 0;">
+              Look-back window for problem history and metric trends (default: 30).
+            </p>
+          </div>
+          <div>
+            <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+              Max tokens (soft cap)
+            </label>
+            <input name="host_briefing_max_tokens" type="number" min="500" max="10000" step="100"
+                   value="{{ current.host_briefing_max_tokens }}"
+                   style="width:100%;box-sizing:border-box;">
+            <p style="font-size:11px;color:#8a93a6;margin:4px 0 0 0;">
+              If the briefing exceeds this, lower-priority sections are dropped
+              (default: 2000).
+            </p>
+          </div>
+        </div>
+      </div>
       <div>
         <button type="submit">Save</button>
       </div>

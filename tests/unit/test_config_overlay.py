@@ -153,3 +153,49 @@ async def test_zabbix_ui_signing_key_from_db(mem):
 
     assert result.zabbix_ui is not None
     assert result.zabbix_ui.signing_key.get_secret_value() == "my-signing-key"
+
+
+async def test_host_briefing_defaults_when_no_sysconn(mem):
+    """With no system/defaults row, host_briefing uses pydantic defaults."""
+    s = _base_settings()
+    result = await overlay_settings(s, mem, _KEY)
+    # Defaults must be present and sane
+    assert result.host_briefing.enabled is True
+    assert result.host_briefing.days == 30
+    assert result.host_briefing.max_tokens == 2000
+
+
+async def test_host_briefing_overlay_from_db(mem):
+    """system/defaults row with host_briefing_* keys overrides Settings defaults."""
+    from zabbix_ai.admin.connections_store import conn_upsert
+
+    await conn_upsert(mem, type_="system", name="defaults", config={
+        "default_model": "claude-sonnet-4-6",
+        "summary_model": "claude-haiku-4-5-20251001",
+        "host_briefing_enabled": False,
+        "host_briefing_days": 7,
+        "host_briefing_max_tokens": 1500,
+    })
+
+    s = _base_settings()
+    result = await overlay_settings(s, mem, _KEY)
+
+    assert result.host_briefing.enabled is False
+    assert result.host_briefing.days == 7
+    assert result.host_briefing.max_tokens == 1500
+
+
+async def test_host_briefing_partial_overlay(mem):
+    """Only host_briefing_days in DB — enabled and max_tokens come from defaults."""
+    from zabbix_ai.admin.connections_store import conn_upsert
+
+    await conn_upsert(mem, type_="system", name="defaults", config={
+        "host_briefing_days": 14,
+    })
+
+    s = _base_settings()
+    result = await overlay_settings(s, mem, _KEY)
+
+    assert result.host_briefing.enabled is True      # default
+    assert result.host_briefing.days == 14           # from DB
+    assert result.host_briefing.max_tokens == 2000   # default

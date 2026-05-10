@@ -5,6 +5,7 @@ from pydantic import HttpUrl, SecretStr
 from zabbix_ai.admin import connections_store as cs
 from zabbix_ai.config import (
     HostBillSettings,
+    HostBriefingSettings,
     OAuthGoogleSettings,
     Settings,
     SlackSettings,
@@ -127,4 +128,21 @@ async def overlay_settings(settings: Settings, memory: Memory,
             settings.max_input_tokens = int(cfg["max_input_tokens"])
         if cfg.get("max_output_tokens"):
             settings.max_output_tokens = int(cfg["max_output_tokens"])
+        # Host briefing settings
+        if "host_briefing_enabled" in cfg:
+            settings.host_briefing = HostBriefingSettings(
+                enabled=bool(cfg["host_briefing_enabled"]),
+                days=int(cfg.get("host_briefing_days",
+                                  settings.host_briefing.days)),
+                max_tokens=int(cfg.get("host_briefing_max_tokens",
+                                        settings.host_briefing.max_tokens)),
+            )
+        elif "host_briefing_days" in cfg or "host_briefing_max_tokens" in cfg:
+            settings.host_briefing = HostBriefingSettings(
+                enabled=settings.host_briefing.enabled,
+                days=int(cfg.get("host_briefing_days",
+                                  settings.host_briefing.days)),
+                max_tokens=int(cfg.get("host_briefing_max_tokens",
+                                        settings.host_briefing.max_tokens)),
+            )
     return settings

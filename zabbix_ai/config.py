@@ -44,6 +44,13 @@ class HostBillSettings(BaseModel):
     api_key: SecretStr = SecretStr("")
 
 
+class HostBriefingSettings(BaseModel):
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+    enabled: bool = True
+    days: int = 30
+    max_tokens: int = 2000
+
+
 class AdminSettings(BaseModel):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
     session_secret_env: str
@@ -79,6 +86,7 @@ class Settings(BaseModel):
     hostbill: HostBillSettings | None = None
     admin: AdminSettings | None = None
     oauth_google: OAuthGoogleSettings | None = None
+    host_briefing: HostBriefingSettings = Field(default_factory=HostBriefingSettings)
 
 
 def load_settings(config_path: Path | str) -> Settings:

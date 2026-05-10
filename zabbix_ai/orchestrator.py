@@ -15,6 +15,7 @@ from zabbix_ai.memory import (
     upsert_pattern,
 )
 from zabbix_ai.prompts import SYSTEM_PROMPT, build_cached_system_blocks
+from zabbix_ai.services.host_briefing import build_host_briefing
 from zabbix_ai.tools import claude_tool_definitions, dispatch
 
 _log = logging.getLogger(__name__)
@@ -84,6 +85,7 @@ class InvestigationContext:
     host_inventory_summary: str = ""
     problem_name: str = ""
     hostgroup: str = ""
+    briefing_md: str = ""
 
 @dataclass
 class InvestigationResult:
@@ -101,7 +103,8 @@ class Orchestrator:
                  max_tool_calls: int, clients: dict[str, Any],
                  memory: Memory | None = None,
                  hostbill_client=None,
-                 scripts: dict[str, Any] | None = None):
+                 scripts: dict[str, Any] | None = None,
+                 host_briefing_config: dict[str, Any] | None = None):
         self.claude = claude
         self.audit = audit
         self.model = model
@@ -111,6 +114,7 @@ class Orchestrator:
         self.memory = memory
         self.hostbill_client = hostbill_client
         self.scripts = scripts or {}
+        self.host_briefing_config = host_briefing_config
 
     async def _enrich_context(self, ctx: InvestigationContext) -> None:
         """Pre-fetch problem and host data so write-back can compute a stable
@@ -154,6 +158,26 @@ class Orchestrator:
                     ctx.hostgroup = groups[0].get("name", "")
                 if not ctx.hostname:
                     ctx.hostname = row.get("name") or row.get("host", "")
+
+        # Host briefing pre-fetch (after hostname/hostgroup are resolved)
+        cfg = self.host_briefing_config
+        if ctx.hostid and cfg and cfg.get("enabled", True):
+            try:
+                # Detect OS from hostname heuristic (rough; briefing uses Linux defaults)
+                hn = (ctx.hostname or "").lower()
+                os_kind = "windows" if any(
+                    w in hn for w in ("win", "plesk", "iis", "windows")
+                ) else "linux"
+                ctx.briefing_md = await build_host_briefing(
+                    client,
+                    hostid=ctx.hostid,
+                    os_kind=os_kind,
+                    days=int(cfg.get("days", 30)),
+                    max_tokens=int(cfg.get("max_tokens", 2000)),
+                    memory=self.memory,
+                )
+            except Exception as e:
+                _log.warning("host_briefing failed for %s: %s", ctx.hostid, e)
 
     async def investigate(self, ctx: InvestigationContext) -> InvestigationResult:
         await self._enrich_context(ctx)
@@ -289,7 +313,11 @@ class Orchestrator:
 
     @staticmethod
     def _render_user_prompt(ctx: InvestigationContext) -> str:
-        parts = [f"Source: {ctx.source}"]
+        parts: list[str] = []
+        if ctx.briefing_md:
+            parts.append(ctx.briefing_md)
+            parts.append("")
+        parts.append(f"Source: {ctx.source}")
         if ctx.instance:
             parts.append(f"Zabbix instance: {ctx.instance}")
         if ctx.eventid:
