@@ -140,8 +140,8 @@ pytest -v
 - v0.3 — Slack adapter ✓ (feat/v0.3-slack)
 - v0.4 — Zabbix UI right-click adapter ✓ (feat/v0.4-zabbix-ui)
 - v0.5 — Memory + pattern recognition + HostBill live lookup ✓ (feat/v0.5-memory-hostbill)
-- v0.6 — Forecasting / anomaly detection
 - v0.7 — Admin UI MVP (auth, dashboard, history, audit, memory) ✓ (feat/v0.7-admin-ui)
+- v0.8 — Forecasting + anomaly tools (forecast.linear, anomaly.iqr, anomaly.zscore) ✓
 - v1.0 — GA
 - v1.1 — HostBill webhook + customer ticket flow
 - v1.2 — Optional auto-mode for Disaster severity

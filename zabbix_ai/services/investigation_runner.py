@@ -16,6 +16,7 @@ from zabbix_ai.orchestrator import (
 )
 from zabbix_ai.services.script_bootstrap import ScriptIndex, ensure_diag_scripts
 from zabbix_ai.tools import diag as tools_diag
+from zabbix_ai.tools import forecast as tools_forecast
 from zabbix_ai.tools import lookup as tools_lookup
 from zabbix_ai.tools import memory as tools_memory
 from zabbix_ai.tools import zabbix as tools_zabbix
@@ -42,6 +43,7 @@ class InvestigationRunner:
         tools_diag.register_tools()
         tools_lookup.register_tools()
         tools_memory.register_tools()
+        tools_forecast.register_tools()
 
         # Ensure rca-ai.diag.* global scripts exist on every Zabbix instance.
         # Best-effort: a transient API failure must not block service startup.
