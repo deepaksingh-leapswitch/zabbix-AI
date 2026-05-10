@@ -39,6 +39,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def healthz() -> dict:
         return {"ok": True, "version": __version__}
 
+    # Admin middleware/routers/static must register synchronously (starlette
+    # rejects add_middleware after the app has started).
+    if settings is not None and settings.admin is not None:
+        from zabbix_ai.admin import register_admin_components
+        register_admin_components(app, settings)
+
     if settings is not None and settings.slack is not None:
         from zabbix_ai.adapters.slack import build_router
         app.include_router(build_router(settings))

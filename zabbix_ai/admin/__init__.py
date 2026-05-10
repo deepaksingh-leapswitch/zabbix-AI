@@ -61,6 +61,46 @@ async def _bootstrap_warning_task(settings: Settings, memory: Memory) -> None:
             pass
 
 
+def register_admin_components(app: FastAPI, settings: Settings) -> None:
+    """Synchronous middleware/router/static registration.
+
+    Must run *before* the app starts (i.e. inside ``create_app``), because
+    starlette refuses ``add_middleware`` once the lifespan has begun.
+    The async parts (DB connect, bootstrap user, background tasks) stay
+    in :func:`setup_admin`, which runs from the lifespan handler.
+    """
+    if settings.admin is None:
+        return
+
+    cookie_secure = True
+    app.state.cookie_secure = cookie_secure
+
+    # ── Security middleware (#1, #3, #4) ─────────────────────────────────────
+    # Order: SecurityHeaders → CSRF (outermost first in add_middleware, so
+    # they execute in reverse order: CSRF first, then SecurityHeaders wraps).
+    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(CSRFMiddleware, cookie_secure=cookie_secure)
+
+    # Rate limiter state (#3)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)  # type: ignore[arg-type]
+
+    # Static files for self-hosted htmx (#12)
+    if _STATIC_DIR.exists():
+        app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+    app.include_router(auth_routes.router)
+    app.include_router(dashboard.router)
+    app.include_router(investigations.router)
+    app.include_router(audit_routes.router)
+    app.include_router(memory_routes.router)
+    app.include_router(connections.router)
+    if settings.zabbix_ui is not None:
+        app.include_router(zabbix_link.router)
+    if settings.oauth_google is not None:
+        app.include_router(oauth_google.router)
+
+
 async def setup_admin(app: FastAPI, settings: Settings,
                       memory: Memory) -> None:
     if settings.admin is None:
@@ -96,7 +136,9 @@ async def setup_admin(app: FastAPI, settings: Settings,
     app.state.settings = settings
     app.state.session_secret = settings.admin.session_secret.get_secret_value()
     app.state.session_ttl = settings.admin.session_max_age_seconds
-    app.state.cookie_secure = True
+    # cookie_secure already set by register_admin_components, but keep it here
+    # for backwards-compatibility with tests that call setup_admin directly.
+    app.state.cookie_secure = getattr(app.state, "cookie_secure", True)
     _base_templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
     # Wrap TemplateResponse to auto-inject csrf_token into every context.
@@ -128,31 +170,6 @@ async def setup_admin(app: FastAPI, settings: Settings,
         app.state.crypto_key = derive_key(secrets_key)
     else:
         app.state.crypto_key = b"\x00" * 32
-
-    # ── Security middleware (#1, #3, #4) ─────────────────────────────────────
-    # Order: SecurityHeaders → CSRF (outermost first in add_middleware, so
-    # they execute in reverse order: CSRF first, then SecurityHeaders wraps).
-    app.add_middleware(SecurityHeadersMiddleware)
-    app.add_middleware(CSRFMiddleware, cookie_secure=app.state.cookie_secure)
-
-    # Rate limiter state (#3)
-    app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)  # type: ignore[arg-type]
-
-    # Static files for self-hosted htmx (#12)
-    if _STATIC_DIR.exists():
-        app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
-
-    app.include_router(auth_routes.router)
-    app.include_router(dashboard.router)
-    app.include_router(investigations.router)
-    app.include_router(audit_routes.router)
-    app.include_router(memory_routes.router)
-    app.include_router(connections.router)
-    if settings.zabbix_ui is not None:
-        app.include_router(zabbix_link.router)
-    if settings.oauth_google is not None:
-        app.include_router(oauth_google.router)
 
     # #21: Background task to warn about retained BOOTSTRAP_ADMIN_PASSWORD.
     # Stash the task on app.state so it isn't garbage-collected mid-loop.
