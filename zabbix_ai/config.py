@@ -53,6 +53,15 @@ class AdminSettings(BaseModel):
     bootstrap_admin_password: SecretStr = SecretStr("")
 
 
+class OAuthGoogleSettings(BaseModel):
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+    client_id: str
+    client_secret_env: str
+    allowed_email_domain: str = ""    # e.g. "leapswitch.com" — restrict to this domain
+    default_role: str = "viewer"       # role assigned to first-time SSO users
+    client_secret: SecretStr = SecretStr("")
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
@@ -69,6 +78,7 @@ class Settings(BaseModel):
     zabbix_ui: ZabbixUiSettings | None = None
     hostbill: HostBillSettings | None = None
     admin: AdminSettings | None = None
+    oauth_google: OAuthGoogleSettings | None = None
 
 
 def load_settings(config_path: Path | str) -> Settings:
@@ -116,4 +126,9 @@ def load_settings(config_path: Path | str) -> Settings:
         if s.admin.bootstrap_admin_password_env:
             bap = os.environ.get(s.admin.bootstrap_admin_password_env, "")
             s.admin.bootstrap_admin_password = SecretStr(bap)
+    if s.oauth_google is not None:
+        sec = os.environ.get(s.oauth_google.client_secret_env)
+        if not sec:
+            raise ValueError(f"{s.oauth_google.client_secret_env} not set in environment")
+        s.oauth_google.client_secret = SecretStr(sec)
     return s

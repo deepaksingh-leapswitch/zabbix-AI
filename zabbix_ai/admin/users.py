@@ -84,6 +84,36 @@ async def update_last_login(memory: Memory, user_id: int) -> None:
     )
 
 
+async def get_user_by_oauth(memory: Memory, *, provider: str,
+                            subject: str) -> dict[str, Any] | None:
+    row = await memory.fetchone(
+        """SELECT id, username, role, disabled FROM users
+           WHERE oauth_provider=? AND oauth_subject=?""",
+        (provider, subject),
+    )
+    if not row:
+        return None
+    return {"id": row[0], "username": row[1], "role": row[2],
+            "disabled": bool(row[3])}
+
+
+async def create_oauth_user(memory: Memory, *, username: str, provider: str,
+                             subject: str, role: str = "viewer",
+                             ) -> dict[str, Any]:
+    await memory.execute(
+        """INSERT INTO users
+           (username, totp_enrolled, role, oauth_provider, oauth_subject,
+            created_at)
+           VALUES (?, 1, ?, ?, ?, ?)""",
+        (username, role, provider, subject, _now_iso()),
+    )
+    row = await memory.fetchone(
+        "SELECT id FROM users WHERE username=?", (username,),
+    )
+    assert row is not None
+    return {"id": row[0], "username": username, "role": role}
+
+
 async def ensure_bootstrap_admin(memory: Memory, *, username: str,
                                   password: str) -> dict[str, Any] | None:
     """Create a single admin user if no users exist. Idempotent."""

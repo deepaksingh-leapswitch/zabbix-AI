@@ -15,6 +15,8 @@ TTL = 3600
 
 def _make_app(db_path: str):
     """Build a minimal FastAPI app with admin state pre-configured."""
+    import types
+
     from fastapi import FastAPI
     from fastapi.templating import Jinja2Templates
 
@@ -26,6 +28,9 @@ def _make_app(db_path: str):
     app.state.session_secret = SECRET
     app.state.session_ttl = TTL
     app.state.cookie_secure = False
+    # Provide a minimal settings stub (oauth_google=None → no Google SSO button)
+    settings_stub = types.SimpleNamespace(oauth_google=None)
+    app.state.settings = settings_stub
 
     app.include_router(auth_routes.router)
     return app

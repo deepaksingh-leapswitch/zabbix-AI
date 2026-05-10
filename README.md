@@ -121,6 +121,33 @@ audit log, learned patterns, host facts.
 Connection management, user management, and pattern editing arrive in
 v0.7.1.
 
+### Google SSO (optional)
+
+Sign in with a Google Workspace account instead of password+TOTP:
+
+1. In Google Cloud Console → APIs & Services → Credentials → **Create
+   OAuth 2.0 Client ID** → Web application.
+2. Authorised redirect URI:
+   `https://zabbix-ai.lsnw.io/admin/oauth/google/callback`
+3. Save the client ID and client secret.
+4. Add to `/etc/zabbix-ai/env`:
+   ```
+   GOOGLE_OAUTH_CLIENT_SECRET=<client secret>
+   ```
+5. Add to `/etc/zabbix-ai/config.yaml`:
+   ```yaml
+   oauth_google:
+     client_id: 1234567890-abc.apps.googleusercontent.com
+     client_secret_env: GOOGLE_OAUTH_CLIENT_SECRET
+     allowed_email_domain: leapswitch.com
+     default_role: operator
+   ```
+6. Restart and visit `/admin/login` — the "Sign in with Google" button
+   appears alongside the password+TOTP form.
+
+First-time SSO sign-in auto-provisions a user; the username is the email
+address. SSO users skip TOTP enrollment (Google already does 2FA).
+
 ## Run a CLI investigation
 
 ```bash

@@ -8,8 +8,7 @@
     1Password, or any TOTP app, then enter the 6-digit code below to confirm.
   </p>
   <div style="text-align: center; margin: 16px 0;">
-    <img src="https://chart.googleapis.com/chart?cht=qr&chs=200x200&chl={{ totp_uri | urlencode }}"
-         alt="TOTP QR code" width="200" height="200">
+    <div style="width: 200px; margin: 0 auto;">{{ totp_qr_svg | safe }}</div>
   </div>
   <p style="font-size: 12px; color: #8a93a6; word-break: break-all;">
     Can't scan? Enter this secret manually:<br>

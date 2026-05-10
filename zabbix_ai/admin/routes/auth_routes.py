@@ -1,18 +1,34 @@
 from __future__ import annotations
 
+import io
+
+import qrcode
+import qrcode.image.svg
 from fastapi import APIRouter, Cookie, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from zabbix_ai.admin import auth, users
+
+
+def _qr_svg(text: str) -> str:
+    """Return an inline SVG <svg>...</svg> string for a QR of `text`."""
+    factory = qrcode.image.svg.SvgPathImage
+    img = qrcode.make(text, image_factory=factory, box_size=10, border=2)
+    buf = io.BytesIO()
+    img.save(buf)
+    return buf.getvalue().decode()
 
 router = APIRouter()
 
 
 @router.get("/admin/login", response_class=HTMLResponse)
 async def login_page(request: Request) -> HTMLResponse:
+    settings = request.app.state.settings
+    google_sso_enabled = settings.oauth_google is not None
     return request.app.state.templates.TemplateResponse(
         request, "admin/login.html",
-        {"flashes": [], "user": None, "active": "login"},
+        {"flashes": [], "user": None, "active": "login",
+         "google_sso_enabled": google_sso_enabled},
     )
 
 
@@ -75,10 +91,12 @@ async def enroll_page(request: Request,
         return RedirectResponse("/admin/login", status_code=303)
     username, totp_secret = row
     uri = users.totp_provisioning_uri(username, totp_secret)
+    totp_qr_svg = _qr_svg(uri)
     return request.app.state.templates.TemplateResponse(
         request, "admin/enroll_totp.html",
         {"flashes": [], "user": None, "active": "enroll",
-         "totp_uri": uri, "totp_secret": totp_secret, "username": username},
+         "totp_uri": uri, "totp_secret": totp_secret, "username": username,
+         "totp_qr_svg": totp_qr_svg},
     )
 
 
@@ -132,9 +150,12 @@ async def logout(request: Request,
 
 
 def _login_error(request: Request, msg: str) -> HTMLResponse:
+    settings = request.app.state.settings
+    google_sso_enabled = settings.oauth_google is not None
     return request.app.state.templates.TemplateResponse(
         request, "admin/login.html",
         {"flashes": [{"kind": "err", "text": msg}],
-         "user": None, "active": "login"},
+         "user": None, "active": "login",
+         "google_sso_enabled": google_sso_enabled},
         status_code=400,
     )

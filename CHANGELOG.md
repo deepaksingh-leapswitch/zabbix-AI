@@ -2,6 +2,20 @@
 
 All notable releases. Format follows [keepachangelog.com](https://keepachangelog.com/).
 
+## v1.1.0 — 2026-05-10
+
+- **Google SSO** for the admin UI. Login page shows "Sign in with
+  Google" alongside the password+TOTP form. First-time SSO sign-in
+  auto-provisions a user; SSO users skip TOTP enrolment (Google's 2FA
+  is sufficient). Optional `allowed_email_domain` restricts to a
+  specific Workspace tenant.
+- **TOTP enrolment QR code rendered server-side** as inline SVG via the
+  `qrcode` library. The previous Google Charts API URL was deprecated
+  and returned a broken image.
+- Schema migration 003: makes `users.password_hash` and
+  `users.totp_secret` nullable; adds `oauth_provider` + `oauth_subject`
+  with a composite unique constraint.
+
 ## v1.0.0 — 2026-05-10
 
 First GA release. The system has been validated end-to-end against

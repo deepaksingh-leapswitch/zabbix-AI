@@ -87,3 +87,43 @@ async def test_set_totp_enrolled(mem):
     fetched = await users.get_user_by_username(mem, "bob")
     assert fetched is not None
     assert fetched["totp_enrolled"] == 1
+
+
+async def test_create_oauth_user_and_get_by_oauth(mem):
+    created = await users.create_oauth_user(
+        mem,
+        username="google_user@example.com",
+        provider="google",
+        subject="123456789",
+        role="operator",
+    )
+    assert created["username"] == "google_user@example.com"
+    assert created["role"] == "operator"
+    assert "id" in created
+
+    found = await users.get_user_by_oauth(
+        mem, provider="google", subject="123456789",
+    )
+    assert found is not None
+    assert found["username"] == "google_user@example.com"
+    assert found["role"] == "operator"
+    assert not found["disabled"]
+
+
+async def test_get_user_by_oauth_returns_none_for_unknown(mem):
+    result = await users.get_user_by_oauth(
+        mem, provider="google", subject="nonexistent",
+    )
+    assert result is None
+
+
+async def test_create_oauth_user_totp_enrolled(mem):
+    """OAuth users are pre-enrolled in TOTP (Google does its own 2FA)."""
+    created = await users.create_oauth_user(
+        mem, username="sso@example.com", provider="google", subject="sub42",
+    )
+    row = await mem.fetchone(
+        "SELECT totp_enrolled FROM users WHERE id=?", (created["id"],),
+    )
+    assert row is not None
+    assert row[0] == 1

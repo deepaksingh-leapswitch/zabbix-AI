@@ -12,6 +12,7 @@ from zabbix_ai.admin.routes import (
     dashboard,
     investigations,
     memory_routes,
+    oauth_google,
     zabbix_link,
 )
 from zabbix_ai.config import Settings
@@ -46,3 +47,5 @@ async def setup_admin(app: FastAPI, settings: Settings,
     app.include_router(memory_routes.router)
     if settings.zabbix_ui is not None:
         app.include_router(zabbix_link.router)
+    if settings.oauth_google is not None:
+        app.include_router(oauth_google.router)

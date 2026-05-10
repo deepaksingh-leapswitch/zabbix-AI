@@ -18,5 +18,19 @@
     </div>
     <button type="submit" style="width: 100%;">Sign in</button>
   </form>
+  {% if google_sso_enabled %}
+  <div style="display: flex; align-items: center; margin: 20px 0 16px;">
+    <hr style="flex: 1; border: none; border-top: 1px solid #2e3347; margin: 0;">
+    <span style="padding: 0 12px; font-size: 12px; color: #8a93a6;">or</span>
+    <hr style="flex: 1; border: none; border-top: 1px solid #2e3347; margin: 0;">
+  </div>
+  <a href="/admin/oauth/google/start"
+     style="display: block; width: 100%; box-sizing: border-box; text-align: center;
+            padding: 9px 0; border-radius: 6px; font-size: 14px; font-weight: 500;
+            background: #fff; color: #3c4043; border: 1px solid #dadce0;
+            text-decoration: none; letter-spacing: 0.01em;">
+    Sign in with Google
+  </a>
+  {% endif %}
 </div>
 {% endblock %}
