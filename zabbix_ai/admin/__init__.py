@@ -12,6 +12,7 @@ from zabbix_ai.admin.routes import (
     dashboard,
     investigations,
     memory_routes,
+    zabbix_link,
 )
 from zabbix_ai.config import Settings
 from zabbix_ai.memory import Memory
@@ -32,6 +33,7 @@ async def setup_admin(app: FastAPI, settings: Settings,
         )
 
     app.state.memory = memory
+    app.state.settings = settings
     app.state.session_secret = settings.admin.session_secret.get_secret_value()
     app.state.session_ttl = settings.admin.session_max_age_seconds
     app.state.cookie_secure = True
@@ -42,3 +44,5 @@ async def setup_admin(app: FastAPI, settings: Settings,
     app.include_router(investigations.router)
     app.include_router(audit_routes.router)
     app.include_router(memory_routes.router)
+    if settings.zabbix_ui is not None:
+        app.include_router(zabbix_link.router)
