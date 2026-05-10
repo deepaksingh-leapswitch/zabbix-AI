@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
+from zabbix_ai.admin.config_overlay import overlay_settings
+from zabbix_ai.admin.crypto import derive_key
 from zabbix_ai.audit import AuditLog
 from zabbix_ai.clients.claude import ClaudeClient
 from zabbix_ai.clients.hostbill import HostBillClient
@@ -34,7 +37,29 @@ class InvestigationRunner:
         self._hostbill: HostBillClient | None = None
         self._scripts: dict[str, ScriptIndex] = {}
 
+    async def _ensure_memory(self) -> None:
+        """Connect to the DB and run migrations exactly once."""
+        if self._mem is not None:
+            return
+        Path(self.settings.sqlite_path).parent.mkdir(parents=True, exist_ok=True)
+        self._mem = Memory(self.settings.sqlite_path)
+        await self._mem.connect()
+        await self._mem.run_migrations(_MIGRATIONS_DIR)
+
     async def __aenter__(self) -> InvestigationRunner:
+        # Open DB early so config overlay can read DB-stored connections.
+        await self._ensure_memory()
+        assert self._mem is not None
+
+        master = os.environ.get("SECRETS_KEY") or os.environ.get("SESSION_SECRET", "")
+        if master:
+            try:
+                self.settings = await overlay_settings(
+                    self.settings, self._mem, derive_key(master),
+                )
+            except Exception as e:
+                _log.warning("config overlay failed, using file config: %s", e)
+
         for inst in self.settings.zabbix_instances:
             self._zabbix_clients[inst.name] = ZabbixClient(
                 inst.name, str(inst.url), inst.token.get_secret_value(),
@@ -56,10 +81,8 @@ class InvestigationRunner:
                 _log.warning("script bootstrap failed for %s: %s", name, e)
                 self._scripts[name] = ScriptIndex()
 
-        Path(self.settings.sqlite_path).parent.mkdir(parents=True, exist_ok=True)
-        self._mem = Memory(self.settings.sqlite_path)
-        await self._mem.connect()
-        await self._mem.run_migrations(_MIGRATIONS_DIR)
+        # Memory is already connected (done above); no-op call for clarity.
+        await self._ensure_memory()
 
         if self.settings.hostbill is not None:
             self._hostbill = HostBillClient(

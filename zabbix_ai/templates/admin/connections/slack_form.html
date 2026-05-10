@@ -1,0 +1,57 @@
+{% extends "admin/base.html" %}
+{% block title %}Slack — Connections{% endblock %}
+{% block content %}
+<h1>Slack</h1>
+<p><a href="/admin/connections">&larr; All connections</a></p>
+<div class="card" style="max-width:520px;">
+  <form method="post" action="/admin/connections/slack/save">
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          Bot token {% if conn %}(leave blank to keep current){% endif %}
+        </label>
+        <input name="bot_token" type="password" style="width:100%;box-sizing:border-box;"
+               placeholder="{{ '**********' if conn else 'xoxb-...' }}">
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          Signing secret {% if conn %}(leave blank to keep current){% endif %}
+        </label>
+        <input name="signing_secret" type="password" style="width:100%;box-sizing:border-box;"
+               placeholder="{{ '**********' if conn else 'signing secret' }}">
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Default Zabbix instance</label>
+        <input name="default_instance" type="text" style="width:100%;box-sizing:border-box;"
+               value="{{ conn.config.get('default_instance','') if conn else '' }}"
+               placeholder="monitoring">
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Channel allowlist (comma-separated)</label>
+        <input name="channel_allowlist" type="text" style="width:100%;box-sizing:border-box;"
+               value="{{ (conn.config.get('channel_allowlist',[]) | join(', ')) if conn else '' }}"
+               placeholder="#alerts, #ops">
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;">
+          <input name="enabled" type="checkbox" value="on"
+                 {% if not conn or conn.enabled %}checked{% endif %}> Enabled
+        </label>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button type="submit">Save</button>
+        <button type="button"
+                hx-post="/admin/connections/slack/test"
+                hx-target="#test-result"
+                style="background:#1a3a5a;">Test connection</button>
+      </div>
+    </div>
+  </form>
+  {% if conn %}
+  <p style="font-size:11px;color:#8a93a6;margin-top:8px;">
+    Last updated: {{ conn.updated_at[:19] }} by {{ conn.updated_by or "—" }}
+  </p>
+  {% endif %}
+  <div id="test-result" style="margin-top:10px;font-size:13px;"></div>
+</div>
+{% endblock %}

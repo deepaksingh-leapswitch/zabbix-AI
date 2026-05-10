@@ -1,0 +1,115 @@
+from __future__ import annotations
+
+from pydantic import HttpUrl, SecretStr
+
+from zabbix_ai.admin import connections_store as cs
+from zabbix_ai.config import (
+    HostBillSettings,
+    OAuthGoogleSettings,
+    Settings,
+    SlackSettings,
+    ZabbixInstance,
+    ZabbixUiSettings,
+)
+from zabbix_ai.memory import Memory
+
+
+async def overlay_settings(settings: Settings, memory: Memory,
+                            crypto_key: bytes) -> Settings:
+    """Mutate settings in place to overlay DB-stored connection config.
+
+    DB rows (when present) take precedence over file-based config so the
+    admin UI can change things without editing /etc/zabbix-ai/*.
+    """
+    # Zabbix instances
+    zabbix_rows = await cs.conn_list(memory, type_filter="zabbix")
+    if zabbix_rows:
+        instances: list[ZabbixInstance] = []
+        for row in zabbix_rows:
+            if not row["enabled"]:
+                continue
+            cfg = row["config"]
+            tok = await cs.secret_get(
+                memory, key=f"zabbix:{row['name']}:token",
+                crypto_key=crypto_key,
+            )
+            if not tok:
+                continue
+            instances.append(ZabbixInstance(
+                name=row["name"], url=HttpUrl(cfg["url"]),
+                token_env=cfg.get("token_env", ""),
+                token=SecretStr(tok),
+            ))
+        if instances:
+            settings.zabbix_instances = instances
+
+    # HostBill (singleton, name='primary')
+    hb = await cs.conn_get(memory, type_="hostbill", name="primary")
+    if hb and hb["enabled"]:
+        api_id = await cs.secret_get(
+            memory, key="hostbill:primary:api_id", crypto_key=crypto_key,
+        )
+        api_key = await cs.secret_get(
+            memory, key="hostbill:primary:api_key", crypto_key=crypto_key,
+        )
+        if api_id and api_key:
+            settings.hostbill = HostBillSettings(
+                api_url=HttpUrl(hb["config"]["api_url"]),
+                api_id_env=hb["config"].get("api_id_env", ""),
+                api_key_env=hb["config"].get("api_key_env", ""),
+                api_id=SecretStr(api_id),
+                api_key=SecretStr(api_key),
+            )
+
+    # Anthropic API key (singleton)
+    ak = await cs.secret_get(
+        memory, key="anthropic:primary:api_key", crypto_key=crypto_key,
+    )
+    if ak:
+        settings.anthropic_api_key = SecretStr(ak)
+
+    # Slack (singleton)
+    slack = await cs.conn_get(memory, type_="slack", name="primary")
+    if slack and slack["enabled"]:
+        bot = await cs.secret_get(
+            memory, key="slack:primary:bot_token", crypto_key=crypto_key,
+        )
+        sig = await cs.secret_get(
+            memory, key="slack:primary:signing_secret", crypto_key=crypto_key,
+        )
+        if bot and sig:
+            settings.slack = SlackSettings(
+                bot_token_env="", signing_secret_env="",
+                default_instance=slack["config"].get("default_instance", ""),
+                channel_allowlist=slack["config"].get("channel_allowlist", []),
+                bot_token=SecretStr(bot),
+                signing_secret=SecretStr(sig),
+            )
+
+    # OAuth Google (singleton)
+    og = await cs.conn_get(memory, type_="oauth_google", name="primary")
+    if og and og["enabled"]:
+        cs_secret = await cs.secret_get(
+            memory, key="oauth_google:primary:client_secret",
+            crypto_key=crypto_key,
+        )
+        if cs_secret:
+            settings.oauth_google = OAuthGoogleSettings(
+                client_id=og["config"]["client_id"],
+                client_secret_env="",
+                allowed_email_domain=og["config"].get("allowed_email_domain", ""),
+                default_role=og["config"].get("default_role", "viewer"),
+                client_secret=SecretStr(cs_secret),
+            )
+
+    # Zabbix UI signing key (singleton)
+    zui = await cs.secret_get(
+        memory, key="zabbix_ui:primary:signing_key", crypto_key=crypto_key,
+    )
+    if zui:
+        if settings.zabbix_ui is None:
+            settings.zabbix_ui = ZabbixUiSettings(
+                signing_key_env="", link_ttl_seconds=300,
+            )
+        settings.zabbix_ui.signing_key = SecretStr(zui)
+    return settings

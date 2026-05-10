@@ -18,7 +18,8 @@ async def test_schema_created(memory):
     rows = await memory.fetchall("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
     names = {r[0] for r in rows}
     assert {"investigations", "host_facts", "patterns",
-            "ticket_resolutions", "audit_log", "schema_version"} <= names
+            "ticket_resolutions", "audit_log", "schema_version",
+            "secrets_kv", "connections"} <= names
 
 
 async def test_migrations_idempotent(memory):
@@ -27,4 +28,4 @@ async def test_migrations_idempotent(memory):
         "SELECT version FROM schema_version ORDER BY version",
     )
     # Each migrations/NNN_*.sql file inserts its own version row.
-    assert rows == [(1,), (2,), (3,)]
+    assert rows == [(1,), (2,), (3,), (4,)]

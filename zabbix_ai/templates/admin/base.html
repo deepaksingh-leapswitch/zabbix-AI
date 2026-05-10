@@ -39,6 +39,9 @@
     <a href="/admin/audit"{% if active=='audit' %} class="active"{% endif %}>Audit log</a>
     <a href="/admin/patterns"{% if active=='patterns' %} class="active"{% endif %}>Patterns</a>
     <a href="/admin/host-facts"{% if active=='host-facts' %} class="active"{% endif %}>Host facts</a>
+    {% if user.role == 'admin' %}
+    <a href="/admin/connections"{% if active=='connections' %} class="active"{% endif %}>Connections</a>
+    {% endif %}
     <span class="right">
       Signed in as <strong>{{ user.username }}</strong>
       ({{ user.role }})

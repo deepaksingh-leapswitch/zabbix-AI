@@ -1,0 +1,37 @@
+{% extends "admin/base.html" %}
+{% block title %}Zabbix Instances — Connections{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+  <h1 style="margin:0;">Zabbix Instances</h1>
+  <a href="/admin/connections/zabbix/new" style="padding:6px 12px;background:#1a4a8a;
+     color:#fff;border-radius:4px;text-decoration:none;font-size:13px;">+ Add new</a>
+</div>
+<p><a href="/admin/connections">&larr; All connections</a></p>
+{% if rows %}
+<table>
+  <thead><tr>
+    <th>Name</th><th>URL</th><th>Status</th><th>Last updated</th><th>By</th><th></th>
+  </tr></thead>
+  <tbody>
+  {% for row in rows %}
+  <tr>
+    <td>{{ row.name }}</td>
+    <td style="font-size:12px;color:#8a93a6;">{{ row.config.get("url","") }}</td>
+    <td>
+      <span style="font-size:11px;padding:2px 8px;border-radius:12px;
+        {% if row.enabled %}background:#1c2c1f;color:#6dd58c;border:1px solid #385a3d;
+        {% else %}background:#2c2c1c;color:#f7c96c;border:1px solid #5a4a38;{% endif %}">
+        {{ "enabled" if row.enabled else "disabled" }}
+      </span>
+    </td>
+    <td style="font-size:12px;color:#8a93a6;">{{ row.updated_at[:19] if row.updated_at else "" }}</td>
+    <td style="font-size:12px;color:#8a93a6;">{{ row.updated_by or "" }}</td>
+    <td><a href="/admin/connections/zabbix/{{ row.name }}/edit">Edit</a></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p style="color:#8a93a6;">No Zabbix instances configured in the database yet.</p>
+{% endif %}
+{% endblock %}

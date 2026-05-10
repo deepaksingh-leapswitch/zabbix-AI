@@ -1,0 +1,56 @@
+{% extends "admin/base.html" %}
+{% block title %}Google SSO — Connections{% endblock %}
+{% block content %}
+<h1>Google SSO (OAuth)</h1>
+<p><a href="/admin/connections">&larr; All connections</a></p>
+<div class="card" style="max-width:520px;">
+  <form method="post" action="/admin/connections/oauth-google/save">
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Client ID</label>
+        <input name="client_id" type="text" style="width:100%;box-sizing:border-box;"
+               value="{{ conn.config.get('client_id','') if conn else '' }}"
+               placeholder="1234567890-abc.apps.googleusercontent.com" required>
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          Client secret {% if conn %}(leave blank to keep current){% endif %}
+        </label>
+        <input name="client_secret" type="password" style="width:100%;box-sizing:border-box;"
+               placeholder="{{ '**********' if conn else 'client secret' }}">
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Allowed email domain</label>
+        <input name="allowed_email_domain" type="text" style="width:100%;box-sizing:border-box;"
+               value="{{ conn.config.get('allowed_email_domain','') if conn else '' }}"
+               placeholder="leapswitch.com">
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Default role for new SSO users</label>
+        <select name="default_role" style="padding:6px 10px;background:#0f1115;color:#e6e8ee;
+                border:1px solid #2a2f3a;border-radius:4px;">
+          {% for role in ["viewer", "operator", "admin"] %}
+          <option value="{{ role }}"
+            {% if (conn and conn.config.get('default_role','viewer') == role) or (not conn and role == 'viewer') %}
+            selected{% endif %}>{{ role }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;">
+          <input name="enabled" type="checkbox" value="on"
+                 {% if not conn or conn.enabled %}checked{% endif %}> Enabled
+        </label>
+      </div>
+      <div>
+        <button type="submit">Save</button>
+      </div>
+    </div>
+  </form>
+  {% if conn %}
+  <p style="font-size:11px;color:#8a93a6;margin-top:8px;">
+    Last updated: {{ conn.updated_at[:19] }} by {{ conn.updated_by or "—" }}
+  </p>
+  {% endif %}
+</div>
+{% endblock %}

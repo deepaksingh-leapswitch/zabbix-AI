@@ -1,0 +1,52 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ "Edit" if editing else "New" }} Zabbix Instance — Connections{% endblock %}
+{% block content %}
+<h1>{{ "Edit" if editing else "Add" }} Zabbix Instance</h1>
+<p><a href="/admin/connections/zabbix">&larr; Zabbix instances</a></p>
+<div class="card" style="max-width:520px;">
+  <form method="post" action="/admin/connections/zabbix/save">
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Instance name</label>
+        <input name="name" type="text" style="width:100%;box-sizing:border-box;"
+               value="{{ conn.name if conn else '' }}"
+               placeholder="e.g. monitoring" required
+               {% if editing %}readonly{% endif %}>
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Zabbix URL</label>
+        <input name="url" type="url" style="width:100%;box-sizing:border-box;"
+               value="{{ conn.config.get('url','') if conn else '' }}"
+               placeholder="https://zabbix.example.com" required>
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          API token {% if editing %}(leave blank to keep current){% endif %}
+        </label>
+        <input name="token" type="password" style="width:100%;box-sizing:border-box;"
+               placeholder="{{ '**********' if editing else 'Zabbix API token' }}">
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;">
+          <input name="enabled" type="checkbox" value="on"
+                 {% if not conn or conn.enabled %}checked{% endif %}> Enabled
+        </label>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button type="submit">Save</button>
+        {% if editing %}
+        <button type="button"
+                hx-post="/admin/connections/zabbix/{{ conn.name }}/test"
+                hx-target="#test-result"
+                style="background:#1a3a5a;">Test connection</button>
+        <form method="post" action="/admin/connections/zabbix/{{ conn.name }}/delete"
+              style="display:inline;" onsubmit="return confirm('Delete this instance?');">
+          <button type="submit" style="background:#3a1a1a;color:#f78b8b;">Delete</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </form>
+  <div id="test-result" style="margin-top:10px;font-size:13px;"></div>
+</div>
+{% endblock %}

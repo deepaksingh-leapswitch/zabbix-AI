@@ -1,0 +1,27 @@
+{% extends "admin/base.html" %}
+{% block title %}Anthropic — Connections{% endblock %}
+{% block content %}
+<h1>Anthropic API Key</h1>
+<p><a href="/admin/connections">&larr; All connections</a></p>
+<div class="card" style="max-width:520px;">
+  <form method="post" action="/admin/connections/anthropic/save">
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          API key {% if has_key %}(leave blank to keep current){% endif %}
+        </label>
+        <input name="api_key" type="password" style="width:100%;box-sizing:border-box;"
+               placeholder="{{ '**********' if has_key else 'sk-ant-...' }}">
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button type="submit">Save</button>
+        <button type="button"
+                hx-post="/admin/connections/anthropic/test"
+                hx-target="#test-result"
+                style="background:#1a3a5a;">Test connection</button>
+      </div>
+    </div>
+  </form>
+  <div id="test-result" style="margin-top:10px;font-size:13px;"></div>
+</div>
+{% endblock %}

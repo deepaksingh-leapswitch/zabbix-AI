@@ -2,6 +2,21 @@
 
 All notable releases. Format follows [keepachangelog.com](https://keepachangelog.com/).
 
+## v1.2.0 — 2026-05-10
+
+- **Connection management UI** at `/admin/connections`. Admin role can
+  add/edit Zabbix instances, HostBill, Slack, Anthropic, Google SSO,
+  and Zabbix UI signing key from the browser instead of editing
+  `/etc/zabbix-ai/{env,config.yaml}` and restarting.
+- **Encrypted secret store** in SQLite (AES-GCM-256). Master key derived
+  from `SECRETS_KEY` env var (falls back to `SESSION_SECRET`).
+- **"Test connection" buttons** on each form probe the real API and
+  return live OK/failure inline.
+- **Edits take effect on the next investigation** — no service restart.
+  `InvestigationRunner.__aenter__` overlays DB-stored connections onto
+  the file-loaded `Settings` before building clients.
+- Schema migration 004 adds `secrets_kv` and `connections` tables.
+
 ## v1.1.0 — 2026-05-10
 
 - **Google SSO** for the admin UI. Login page shows "Sign in with

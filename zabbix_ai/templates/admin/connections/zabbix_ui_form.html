@@ -1,0 +1,40 @@
+{% extends "admin/base.html" %}
+{% block title %}Zabbix UI Signing Key — Connections{% endblock %}
+{% block content %}
+<h1>Zabbix UI Signing Key</h1>
+<p><a href="/admin/connections">&larr; All connections</a></p>
+<div class="card" style="max-width:520px;">
+  <form method="post" action="/admin/connections/zabbix-ui/save">
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          Signing key {% if has_key %}(leave blank to keep current){% endif %}
+        </label>
+        <input name="signing_key" type="password" style="width:100%;box-sizing:border-box;"
+               placeholder="{{ '**********' if has_key else '64-hex-char key' }}">
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">Link TTL (seconds)</label>
+        <input name="link_ttl_seconds" type="number" min="30" max="86400"
+               style="width:100%;box-sizing:border-box;"
+               value="{{ conn.config.get('link_ttl_seconds', 300) if conn else 300 }}">
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button type="submit">Save</button>
+      </div>
+    </div>
+  </form>
+  <form method="post" action="/admin/connections/zabbix-ui/regenerate-key"
+        style="margin-top:12px;"
+        onsubmit="return confirm('Generate and store a new random signing key? Old signed URLs will stop working.');">
+    <button type="submit" style="background:#2a1a3a;color:#c98ef7;">
+      Generate new random key
+    </button>
+  </form>
+  {% if conn %}
+  <p style="font-size:11px;color:#8a93a6;margin-top:8px;">
+    Last updated: {{ conn.updated_at[:19] }} by {{ conn.updated_by or "—" }}
+  </p>
+  {% endif %}
+</div>
+{% endblock %}

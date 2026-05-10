@@ -118,8 +118,21 @@ audit log, learned patterns, host facts.
 6. **Clear `BOOTSTRAP_ADMIN_PASSWORD` from the env file** after first
    login so it can't be reused.
 
-Connection management, user management, and pattern editing arrive in
-v0.7.1.
+### Connection management
+
+Once logged in as admin, visit `/admin/connections` to add/edit:
+  - Zabbix instances (multiple, one row each)
+  - HostBill API credentials
+  - Slack bot token + channel allowlist
+  - Anthropic API key
+  - Google SSO client config
+  - Zabbix UI signing key
+
+Secrets are AES-GCM encrypted with a key derived from `SECRETS_KEY`
+(or `SESSION_SECRET` if unset). Edits take effect on the NEXT
+investigation — no service restart needed.
+
+User management and pattern editing arrive in v0.7.1.
 
 ### Google SSO (optional)
 

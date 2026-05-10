@@ -1,0 +1,51 @@
+{% extends "admin/base.html" %}
+{% block title %}HostBill — Connections{% endblock %}
+{% block content %}
+<h1>HostBill</h1>
+<p><a href="/admin/connections">&larr; All connections</a></p>
+<div class="card" style="max-width:520px;">
+  <form method="post" action="/admin/connections/hostbill/save">
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">API URL</label>
+        <input name="api_url" type="url" style="width:100%;box-sizing:border-box;"
+               value="{{ conn.config.get('api_url','') if conn else '' }}"
+               placeholder="https://hostbill.example.com/admin/api.php" required>
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          API ID {% if conn %}(leave blank to keep current){% endif %}
+        </label>
+        <input name="api_id" type="password" style="width:100%;box-sizing:border-box;"
+               placeholder="{{ '**********' if conn else 'API ID' }}">
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          API key {% if conn %}(leave blank to keep current){% endif %}
+        </label>
+        <input name="api_key" type="password" style="width:100%;box-sizing:border-box;"
+               placeholder="{{ '**********' if conn else 'API key' }}">
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;">
+          <input name="enabled" type="checkbox" value="on"
+                 {% if not conn or conn.enabled %}checked{% endif %}> Enabled
+        </label>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button type="submit">Save</button>
+        <button type="button"
+                hx-post="/admin/connections/hostbill/test"
+                hx-target="#test-result"
+                style="background:#1a3a5a;">Test connection</button>
+      </div>
+    </div>
+  </form>
+  {% if conn %}
+  <p style="font-size:11px;color:#8a93a6;margin-top:8px;">
+    Last updated: {{ conn.updated_at[:19] }} by {{ conn.updated_by or "—" }}
+  </p>
+  {% endif %}
+  <div id="test-result" style="margin-top:10px;font-size:13px;"></div>
+</div>
+{% endblock %}
