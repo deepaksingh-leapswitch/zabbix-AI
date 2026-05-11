@@ -83,7 +83,7 @@ async def login_submit(request: Request, username: str = Form(...),
         resp = RedirectResponse(url="/admin/enroll-totp", status_code=303)
         resp.set_cookie("zai_pretotp", token, max_age=300,
                          httponly=True, secure=request.app.state.cookie_secure,
-                         samesite="strict")
+                         samesite="lax")
         return resp
 
     totp_valid = await users.verify_totp_with_replay_check(
@@ -111,7 +111,7 @@ async def login_submit(request: Request, username: str = Form(...),
     resp = RedirectResponse(url="/admin", status_code=303)
     resp.set_cookie("zai_session", cookie, max_age=ttl,
                      httponly=True, secure=request.app.state.cookie_secure,
-                     samesite="strict")
+                     samesite="lax")
     return resp
 
 
@@ -191,7 +191,7 @@ async def enroll_submit(request: Request, totp_code: str = Form(...),
     resp = RedirectResponse(url="/admin", status_code=303)
     resp.set_cookie("zai_session", cookie, max_age=ttl,
                      httponly=True, secure=request.app.state.cookie_secure,
-                     samesite="strict")
+                     samesite="lax")
     resp.delete_cookie("zai_pretotp")
     return resp
 

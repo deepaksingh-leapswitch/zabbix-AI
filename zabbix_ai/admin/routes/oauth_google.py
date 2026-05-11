@@ -64,7 +64,7 @@ async def start(request: Request) -> RedirectResponse:
     resp.set_cookie(
         "zai_oauth_pkce", cookie, max_age=600,
         httponly=True, secure=request.app.state.cookie_secure,
-        samesite="strict",
+        samesite="lax",
     )
     return resp
 
@@ -166,7 +166,7 @@ async def callback(request: Request, code: str = "",
     resp.set_cookie(
         "zai_session", cookie, max_age=ttl,
         httponly=True, secure=request.app.state.cookie_secure,
-        samesite="strict",
+        samesite="lax",
     )
     resp.delete_cookie("zai_oauth_pkce")
     return resp
