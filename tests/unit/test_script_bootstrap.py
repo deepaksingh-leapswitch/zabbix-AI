@@ -211,6 +211,19 @@ def test_diag_disk_usage_defined_for_both_os():
     assert "EncodedCommand" in d.windows
 
 
+def test_diag_windows_winsxs_defined_windows_only():
+    d = _diag("diag.windows_winsxs")
+    assert d is not None
+    # No Linux variant — it's a Windows-only diag.
+    assert d.linux is None
+    assert d.windows is not None
+    # Windows variant must be base64-encoded PowerShell
+    assert "powershell" in d.windows
+    assert "EncodedCommand" in d.windows
+    # Should be listed as Windows-supported only
+    assert d.supported_os == ["windows"]
+
+
 async def test_v14_cert_expiry_create_includes_manualinput_validator():
     """cert_expiry's bootstrap params must include the validator regex."""
     d = _diag("diag.cert_expiry")

@@ -232,6 +232,16 @@ async def test_diag_disk_usage_dispatches(context, fake_client):
     assert "disk_usage" in params["scriptid"]
 
 
+def test_diag_windows_winsxs_in_allowlist():
+    assert "diag.windows_winsxs" in ALLOWED_DIAG_KEYS
+
+
+def test_diag_windows_winsxs_registered():
+    from zabbix_ai.tools import ALLOWED_TOOLS
+    register_tools()
+    assert "diag.windows_winsxs" in ALLOWED_TOOLS
+
+
 async def test_diag_network_dispatches(context, fake_client):
     register_tools()
     await dispatch("diag.network", {"hostid": 7, "instance": "monitoring"},

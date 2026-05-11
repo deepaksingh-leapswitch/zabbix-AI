@@ -2,6 +2,37 @@
 
 All notable releases. Format follows [keepachangelog.com](https://keepachangelog.com/).
 
+## v1.4.3 — 2026-05-11
+
+**Two improvements driven by inv #9 on deepak-vm.**
+
+1. **`diag.disk_usage` (Windows) — robocopy fallback + unaccounted-bytes
+   summary.** FSO silently returns 0 GB on folders with access-denied
+   subdirs (e.g. `C:\Windows`, `C:\Users`), which made inv #9 conflate
+   "couldn't measure" with "empty." Now:
+   - Each row carries a `Notes` column showing how the size was
+     obtained (`fso`, `robocopy fallback`, `n/a (access denied)`).
+   - When FSO returns 0 we try `robocopy /L /E /BYTES` as a fallback
+     (raw-byte total, gracefully tolerates per-file access denials).
+   - A trailing summary line per drive reports `total used / measured
+     / unaccounted GB`; if the unaccounted delta exceeds 5 GB, the
+     output explicitly tells the AI to follow up with
+     `diag.windows_winsxs`.
+
+2. **New tool `diag.windows_winsxs`.** Windows-only follow-up that
+   measures the usual suspects under `C:\Windows` (WinSxS,
+   SoftwareDistribution\Download, Installer, System32\config,
+   event-log dir, Panther) plus `hiberfil.sys` / `pagefile.sys` /
+   `swapfile.sys`. Each uses FSO with robocopy fallback. Also reports
+   the pending Windows update count and prints (does **not** execute)
+   the cleanmgr / DISM `/StartComponentCleanup` / `powercfg /h off` /
+   `SoftwareDistribution` purge commands an operator would run.
+
+Tool descriptions instruct the model to call `diag.windows_winsxs`
+automatically when `diag.disk_usage` reports a large unaccounted
+delta — so the next investigation on deepak-vm will chain both calls
+and produce a complete picture of `C:\Windows` usage.
+
 ## v1.4.2 — 2026-05-11
 
 **Fix `diag.disk_usage` timeout on Windows.** The v1.4.1 implementation

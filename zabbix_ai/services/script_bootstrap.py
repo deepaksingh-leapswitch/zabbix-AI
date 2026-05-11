@@ -288,11 +288,12 @@ _LINUX_DISK_USAGE = (
 _WINDOWS_DISK_USAGE_PS = (
     # Drive summary first — always cheap. Then for each fixed drive, walk
     # top-level folders only (NO -Recurse) and use FileSystemObject.Size
-    # (native COM, reads NTFS metadata) for each. On a 200 GB drive this
-    # is typically 5-15s versus 5+ minutes for Get-ChildItem -Recurse.
-    # A 22-second per-drive stopwatch budget bails out and emits what's
-    # been computed so far — better than the AI getting a timeout error
-    # with no data.
+    # (native COM, reads NTFS metadata) for each. Folders FSO can't
+    # measure (access-denied subfolders → silent 0) are labelled
+    # "n/a" instead of being conflated with truly-empty 0s. A summary
+    # line reports the unmeasured-bytes delta so the AI knows how
+    # much of the drive's used space is hiding in folders FSO refused
+    # (typically C:\Windows / C:\Users).
     "$ProgressPreference='SilentlyContinue';"
     "$ErrorActionPreference='SilentlyContinue';"
     "Write-Output '=== drive summary ===';"
@@ -306,28 +307,140 @@ _WINDOWS_DISK_USAGE_PS = (
     "    else{0}}} | "
     "Format-Table -AutoSize | Out-String;"
     "$fso = New-Object -ComObject Scripting.FileSystemObject;"
-    "foreach ($d in "
-    "(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3').DeviceID) {"
+    "$disks = Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3';"
+    "foreach ($disk in $disks) {"
+    "  $d = $disk.DeviceID;"
+    "  $usedGB = ($disk.Size - $disk.FreeSpace)/1GB;"
     "  Write-Output \"=== $d top folders (FSO size, 22s/drive budget) ===\";"
     "  $sw = [Diagnostics.Stopwatch]::StartNew();"
     "  $rows = New-Object Collections.ArrayList;"
-    "  $skipped = 0;"
+    "  $skipped = 0; $measuredBytes = 0;"
     "  Get-ChildItem -LiteralPath \"$d\\\\\" -Directory -Force "
     "    -ErrorAction SilentlyContinue | "
     "  ForEach-Object {"
     "    if ($sw.ElapsedMilliseconds -gt 22000) { $skipped++; return }"
-    "    try {"
-    "      $bytes = $fso.GetFolder($_.FullName).Size;"
-    "      [void]$rows.Add([PSCustomObject]@{"
-    "        Path = $_.FullName;"
-    "        SizeGB = if ($bytes) {[math]::Round($bytes/1GB,2)} else {0}"
-    "      })"
-    "    } catch {}"
+    "    $size = $null; $status = 'ok';"
+    "    try { $size = $fso.GetFolder($_.FullName).Size } "
+    "    catch { $status = 'n/a (access denied)' }"
+    "    if ($size -eq $null -or $size -eq 0) {"
+    # robocopy /L /E /BYTES /NFL /NDL /NJH /NC /NS lists the source
+    # tree without copying and emits a 'Bytes :' total in raw bytes.
+    # It tolerates per-file access denials gracefully where FSO silent
+    # -fails the whole folder. The 6-second per-folder cap keeps a
+    # huge folder (e.g. C:\Windows) from blowing the drive budget.
+    "      $rcOut = & robocopy.exe $_.FullName '\\\\nonexistent\\dummy' "
+    "        /L /E /BYTES /NFL /NDL /NJH /NC /NS /R:0 /W:0 2>$null;"
+    "      $bytesLine = $rcOut | Where-Object { $_ -match '^\\s*Bytes :\\s+(\\d+)' } | "
+    "        Select-Object -First 1;"
+    "      if ($bytesLine -match 'Bytes :\\s+(\\d+)') { "
+    "        $size = [long]$matches[1]; $status = 'robocopy fallback'"
+    "      } else { $status = if ($status -eq 'ok') {'n/a (empty?)'} else {$status} }"
+    "    }"
+    "    if ($size -and $size -gt 0) { $measuredBytes += $size }"
+    "    [void]$rows.Add([PSCustomObject]@{"
+    "      Path = $_.FullName;"
+    "      SizeGB = if ($size) {[math]::Round($size/1GB,2)} else {0};"
+    "      Notes = $status"
+    "    })"
     "  };"
     "  $rows | Sort-Object SizeGB -Descending | Select-Object -First 15 | "
     "    Format-Table -AutoSize | Out-String;"
+    "  $unaccGB = [math]::Round($usedGB - ($measuredBytes/1GB), 1);"
+    "  $usedR = [math]::Round($usedGB,1);"
+    "  $measR = [math]::Round($measuredBytes/1GB,1);"
+    "  Write-Output (\"  Drive $d total used: $usedR GB, \" + "
+    "    \"measured: $measR GB, unaccounted: $unaccGB GB\");"
+    "  if ($unaccGB -gt 5) {"
+    "    Write-Output (\"  WARN $unaccGB GB unaccounted for - likely \" + "
+    "      \"in folders the agent can't fully traverse (C:\\Windows, \" + "
+    "      \"C:\\Users, etc.). Call diag.windows_winsxs for a deeper \" + "
+    "      \"look at Windows-managed space.\")"
+    "  }"
     "  if ($skipped) { Write-Output \"  ($skipped folder(s) skipped — budget exhausted)\" }"
     "}"
+)
+
+# Windows-only: deep look at the largest space consumers under C:\Windows
+# (WinSxS, SoftwareDistribution, system32\config, etc.) plus pagefile /
+# hibernation. Use this when diag.disk_usage reports a large 'unaccounted'
+# delta — the bulk of Windows space is in places FSO refuses to size.
+_WINDOWS_WINSXS_PS = (
+    "$ProgressPreference='SilentlyContinue';"
+    "$ErrorActionPreference='SilentlyContinue';"
+    "$fso = New-Object -ComObject Scripting.FileSystemObject;"
+    "function MeasureSize($p) {"
+    "  if (-not (Test-Path -LiteralPath $p)) { return @{ size=0; status='not present' } }"
+    "  $item = Get-Item -LiteralPath $p -Force;"
+    "  if (-not $item.PSIsContainer) {"
+    "    return @{ size=$item.Length; status='file' }"
+    "  }"
+    "  $s = $null;"
+    "  try { $s = $fso.GetFolder($p).Size } catch {}"
+    "  if ($s -eq $null -or $s -eq 0) {"
+    "    $rc = & robocopy.exe $p '\\\\nonexistent\\dummy' "
+    "      /L /E /BYTES /NFL /NDL /NJH /NC /NS /R:0 /W:0 2>$null;"
+    "    $line = $rc | Where-Object { $_ -match '^\\s*Bytes :\\s+(\\d+)' } | "
+    "      Select-Object -First 1;"
+    "    if ($line -match 'Bytes :\\s+(\\d+)') { "
+    "      return @{ size=[long]$matches[1]; status='robocopy' }"
+    "    }"
+    "    return @{ size=0; status='n/a' }"
+    "  }"
+    "  return @{ size=$s; status='fso' }"
+    "};"
+    "Write-Output '=== Windows space consumers ===';"
+    "$targets = @("
+    "  \"$env:SystemRoot\","
+    "  \"$env:SystemRoot\\WinSxS\","
+    "  \"$env:SystemRoot\\SoftwareDistribution\\Download\","
+    "  \"$env:SystemRoot\\Temp\","
+    "  \"$env:SystemRoot\\Logs\","
+    "  \"$env:SystemRoot\\Installer\","
+    "  \"$env:SystemRoot\\System32\\config\","
+    "  \"$env:SystemRoot\\Panther\","
+    "  \"$env:SystemRoot\\System32\\winevt\\Logs\","
+    "  \"$env:SystemDrive\\hiberfil.sys\","
+    "  \"$env:SystemDrive\\pagefile.sys\","
+    "  \"$env:SystemDrive\\swapfile.sys\""
+    ");"
+    "$rows = New-Object Collections.ArrayList;"
+    "foreach ($t in $targets) {"
+    "  $r = MeasureSize $t;"
+    "  [void]$rows.Add([PSCustomObject]@{"
+    "    Path = $t;"
+    "    SizeGB = if ($r.size) {[math]::Round($r.size/1GB,2)} else {0};"
+    "    Source = $r.status"
+    "  })"
+    "};"
+    "$rows | Format-Table -AutoSize | Out-String;"
+    "Write-Output '';"
+    "Write-Output '=== page file (WMI) ===';"
+    "Get-CimInstance Win32_PageFileUsage 2>$null | "
+    "  Select-Object Name,@{N='AllocMB';E={$_.AllocatedBaseSize}},"
+    "    @{N='UsedMB';E={$_.CurrentUsage}} | "
+    "  Format-Table -AutoSize | Out-String;"
+    "Write-Output '=== pending Windows updates ===';"
+    "try {"
+    "  $session = New-Object -ComObject Microsoft.Update.Session;"
+    "  $searcher = $session.CreateUpdateSearcher();"
+    "  $r = $searcher.Search('IsInstalled=0 AND IsHidden=0');"
+    "  Write-Output (\"Pending updates: $($r.Updates.Count) \" + "
+    "    \"(installing them lets Windows clean up superseded \" + "
+    "    \"WinSxS components)\")"
+    "} catch { Write-Output '  (could not query Windows Update)' };"
+    "Write-Output '';"
+    "Write-Output '=== recovery commands (informational, NOT executed) ===';"
+    "Write-Output '  cleanmgr /sagerun:1';"
+    "Write-Output '    -- GUI cleanup wizard';"
+    "Write-Output '  DISM /Online /Cleanup-Image /StartComponentCleanup';"
+    "Write-Output '    -- WinSxS shrink (5-15 min)';"
+    "Write-Output '  DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase';"
+    "Write-Output '    -- aggressive; cannot uninstall old updates after';"
+    "Write-Output '  powercfg /h off';"
+    "Write-Output '    -- delete hiberfil.sys';"
+    "Write-Output ('  net stop wuauserv ; Remove-Item '"
+    "  + '$env:SystemRoot\\SoftwareDistribution\\Download\\* -Recurse -Force ; '"
+    "  + 'net start wuauserv')"
 )
 
 # Linux multi-command snapshot — runs through /bin/sh on the agent.
@@ -549,6 +662,15 @@ DIAG_DEFINITIONS: list[DiagDef] = [
             "Call this on any disk-space alert before suggesting RDP/SSH.",
             linux=_LINUX_DISK_USAGE,
             windows=_ps_encoded(_WINDOWS_DISK_USAGE_PS)),
+    DiagDef("diag.windows_winsxs",
+            "Windows-only follow-up to diag.disk_usage when the bulk of "
+            "C: usage is unaccounted-for (i.e. hiding in C:\\Windows). "
+            "Sizes WinSxS component store, SoftwareDistribution\\Download, "
+            "Installer cache, System32\\config, event logs, plus "
+            "hiberfil.sys / pagefile.sys / swapfile.sys. Reports pending "
+            "Windows updates and prints (does NOT execute) the cleanmgr / "
+            "DISM / powercfg recovery commands an operator would run.",
+            windows=_ps_encoded(_WINDOWS_WINSXS_PS)),
     # Consolidated first-look snapshot. Bundles uptime, df, free, top, ps,
     # ss, dmesg into one execution so the AI doesn't need 7 round trips for
     # a typical first triage. Individual diags remain available for follow-up.

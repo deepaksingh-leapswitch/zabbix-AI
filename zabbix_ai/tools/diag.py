@@ -22,7 +22,7 @@ ALLOWED_DIAG_KEYS = {
     "diag.mysql_status", "diag.mysql_processlist", "diag.apache_status",
     "diag.snapshot", "diag.mail_queue",
     "diag.network", "diag.cert_expiry", "diag.smart",
-    "diag.disk_usage",
+    "diag.disk_usage", "diag.windows_winsxs",
 }
 
 
@@ -175,6 +175,16 @@ def register_tools() -> None:
         "used/free plus top 15 folders. ALWAYS call this on a disk-space "
         "alert before suggesting RDP/SSH or recommending the operator "
         "check manually.",
+    )
+    _register_simple(
+        "diag.windows_winsxs",
+        "Windows-only deep dive when diag.disk_usage shows a large "
+        "'unaccounted' delta. Sizes WinSxS, SoftwareDistribution, "
+        "Installer cache, event logs, hiberfil.sys, pagefile.sys, "
+        "swapfile.sys. Reports pending update count and prints the "
+        "exact cleanmgr / DISM / powercfg recovery commands (it does NOT "
+        "execute them). Call this AFTER diag.disk_usage on a Windows "
+        "host when most of the drive's used space isn't accounted for.",
     )
 
     @register(
