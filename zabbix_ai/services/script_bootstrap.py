@@ -286,14 +286,11 @@ _LINUX_DISK_USAGE = (
 # take minutes otherwise. Errors swallowed so a locked subdir doesn't
 # blank the whole report.
 _WINDOWS_DISK_USAGE_PS = (
-    # Drive summary first — always cheap. Then for each fixed drive, walk
-    # top-level folders only (NO -Recurse) and use FileSystemObject.Size
-    # (native COM, reads NTFS metadata) for each. Folders FSO can't
-    # measure (access-denied subfolders → silent 0) are labelled
-    # "n/a" instead of being conflated with truly-empty 0s. A summary
-    # line reports the unmeasured-bytes delta so the AI knows how
-    # much of the drive's used space is hiding in folders FSO refused
-    # (typically C:\Windows / C:\Users).
+    # FSO-only, fast. NO robocopy fallback — that pushed us past the 30 s
+    # Zabbix script-timeout ceiling. Folders FSO refuses (silent 0 from
+    # access-denied subdirs) are labelled "n/a — call diag.windows_winsxs"
+    # so the AI knows to chain. A trailing 'unaccounted' summary tells
+    # the model how much disk is hiding in those folders.
     "$ProgressPreference='SilentlyContinue';"
     "$ErrorActionPreference='SilentlyContinue';"
     "Write-Output '=== drive summary ===';"
@@ -311,30 +308,19 @@ _WINDOWS_DISK_USAGE_PS = (
     "foreach ($disk in $disks) {"
     "  $d = $disk.DeviceID;"
     "  $usedGB = ($disk.Size - $disk.FreeSpace)/1GB;"
-    "  Write-Output \"=== $d top folders (FSO size, 22s/drive budget) ===\";"
+    "  Write-Output \"=== $d top folders (FSO size, ~10s budget) ===\";"
     "  $sw = [Diagnostics.Stopwatch]::StartNew();"
     "  $rows = New-Object Collections.ArrayList;"
     "  $skipped = 0; $measuredBytes = 0;"
     "  Get-ChildItem -LiteralPath \"$d\\\\\" -Directory -Force "
     "    -ErrorAction SilentlyContinue | "
     "  ForEach-Object {"
-    "    if ($sw.ElapsedMilliseconds -gt 22000) { $skipped++; return }"
-    "    $size = $null; $status = 'ok';"
+    "    if ($sw.ElapsedMilliseconds -gt 18000) { $skipped++; return }"
+    "    $size = $null; $status = 'fso';"
     "    try { $size = $fso.GetFolder($_.FullName).Size } "
     "    catch { $status = 'n/a (access denied)' }"
-    "    if ($size -eq $null -or $size -eq 0) {"
-    # robocopy /L /E /BYTES /NFL /NDL /NJH /NC /NS lists the source
-    # tree without copying and emits a 'Bytes :' total in raw bytes.
-    # It tolerates per-file access denials gracefully where FSO silent
-    # -fails the whole folder. The 6-second per-folder cap keeps a
-    # huge folder (e.g. C:\Windows) from blowing the drive budget.
-    "      $rcOut = & robocopy.exe $_.FullName '\\\\nonexistent\\dummy' "
-    "        /L /E /BYTES /NFL /NDL /NJH /NC /NS /R:0 /W:0 2>$null;"
-    "      $bytesLine = $rcOut | Where-Object { $_ -match '^\\s*Bytes :\\s+(\\d+)' } | "
-    "        Select-Object -First 1;"
-    "      if ($bytesLine -match 'Bytes :\\s+(\\d+)') { "
-    "        $size = [long]$matches[1]; $status = 'robocopy fallback'"
-    "      } else { $status = if ($status -eq 'ok') {'n/a (empty?)'} else {$status} }"
+    "    if (-not $size -or $size -eq 0) {"
+    "      $status = 'n/a (call diag.windows_winsxs)'"
     "    }"
     "    if ($size -and $size -gt 0) { $measuredBytes += $size }"
     "    [void]$rows.Add([PSCustomObject]@{"
@@ -351,10 +337,11 @@ _WINDOWS_DISK_USAGE_PS = (
     "  Write-Output (\"  Drive $d total used: $usedR GB, \" + "
     "    \"measured: $measR GB, unaccounted: $unaccGB GB\");"
     "  if ($unaccGB -gt 5) {"
-    "    Write-Output (\"  WARN $unaccGB GB unaccounted for - likely \" + "
-    "      \"in folders the agent can't fully traverse (C:\\Windows, \" + "
-    "      \"C:\\Users, etc.). Call diag.windows_winsxs for a deeper \" + "
-    "      \"look at Windows-managed space.\")"
+    "    Write-Output (\"  WARN $unaccGB GB unaccounted for - the bulk \" + "
+    "      \"is almost certainly hiding in C:\\Windows or C:\\Users \" + "
+    "      \"(FSO can't measure those due to access-denied subdirs). \" + "
+    "      \"Call diag.windows_winsxs NEXT to size WinSxS / Software\" + "
+    "      \"Distribution / Installer / pagefile etc.\")"
     "  }"
     "  if ($skipped) { Write-Output \"  ($skipped folder(s) skipped — budget exhausted)\" }"
     "}"
@@ -365,12 +352,21 @@ _WINDOWS_DISK_USAGE_PS = (
 # hibernation. Use this when diag.disk_usage reports a large 'unaccounted'
 # delta — the bulk of Windows space is in places FSO refuses to size.
 _WINDOWS_WINSXS_PS = (
+    # Each target gets its own Start-Job + Wait-Job -Timeout 6 budget so
+    # WinSxS taking 25 s can't sink the whole call. FSO first, robocopy
+    # only as fallback for folders FSO refuses. Per-target timeout means
+    # a single huge directory degrades to "(timed out)" and we keep
+    # going — the other 11 targets still report correctly.
     "$ProgressPreference='SilentlyContinue';"
     "$ErrorActionPreference='SilentlyContinue';"
-    "$fso = New-Object -ComObject Scripting.FileSystemObject;"
-    "function MeasureSize($p) {"
-    "  if (-not (Test-Path -LiteralPath $p)) { return @{ size=0; status='not present' } }"
-    "  $item = Get-Item -LiteralPath $p -Force;"
+    "$measureBlock = {"
+    "  param($p)"
+    "  $fso = New-Object -ComObject Scripting.FileSystemObject;"
+    "  if (-not (Test-Path -LiteralPath $p)) {"
+    "    return @{ size=0; status='not present' }"
+    "  }"
+    "  $item = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue;"
+    "  if (-not $item) { return @{ size=0; status='inaccessible' } }"
     "  if (-not $item.PSIsContainer) {"
     "    return @{ size=$item.Length; status='file' }"
     "  }"
@@ -379,18 +375,18 @@ _WINDOWS_WINSXS_PS = (
     "  if ($s -eq $null -or $s -eq 0) {"
     "    $rc = & robocopy.exe $p '\\\\nonexistent\\dummy' "
     "      /L /E /BYTES /NFL /NDL /NJH /NC /NS /R:0 /W:0 2>$null;"
-    "    $line = $rc | Where-Object { $_ -match '^\\s*Bytes :\\s+(\\d+)' } | "
+    "    $line = $rc | "
+    "      Where-Object { $_ -match '^\\s*Bytes :\\s+(\\d+)' } | "
     "      Select-Object -First 1;"
-    "    if ($line -match 'Bytes :\\s+(\\d+)') { "
+    "    if ($line -match 'Bytes :\\s+(\\d+)') {"
     "      return @{ size=[long]$matches[1]; status='robocopy' }"
     "    }"
     "    return @{ size=0; status='n/a' }"
     "  }"
     "  return @{ size=$s; status='fso' }"
     "};"
-    "Write-Output '=== Windows space consumers ===';"
+    "Write-Output '=== Windows space consumers (6s/target budget) ===';"
     "$targets = @("
-    "  \"$env:SystemRoot\","
     "  \"$env:SystemRoot\\WinSxS\","
     "  \"$env:SystemRoot\\SoftwareDistribution\\Download\","
     "  \"$env:SystemRoot\\Temp\","
@@ -404,15 +400,31 @@ _WINDOWS_WINSXS_PS = (
     "  \"$env:SystemDrive\\swapfile.sys\""
     ");"
     "$rows = New-Object Collections.ArrayList;"
+    "$total = 0;"
     "foreach ($t in $targets) {"
-    "  $r = MeasureSize $t;"
-    "  [void]$rows.Add([PSCustomObject]@{"
-    "    Path = $t;"
-    "    SizeGB = if ($r.size) {[math]::Round($r.size/1GB,2)} else {0};"
-    "    Source = $r.status"
-    "  })"
+    "  $job = Start-Job -ScriptBlock $measureBlock -ArgumentList $t;"
+    "  $done = Wait-Job $job -Timeout 6;"
+    "  if ($done) {"
+    "    $r = Receive-Job $job;"
+    "    Remove-Job $job -Force;"
+    "    $sz = if ($r.size) { $r.size } else { 0 };"
+    "    if ($sz -gt 0) { $total += $sz }"
+    "    [void]$rows.Add([PSCustomObject]@{"
+    "      Path = $t;"
+    "      SizeGB = if ($sz) {[math]::Round($sz/1GB,2)} else {0};"
+    "      Source = if ($r.status) { $r.status } else { 'n/a' }"
+    "    })"
+    "  } else {"
+    "    Stop-Job $job -ErrorAction SilentlyContinue;"
+    "    Remove-Job $job -Force -ErrorAction SilentlyContinue;"
+    "    [void]$rows.Add([PSCustomObject]@{"
+    "      Path = $t; SizeGB = 0; Source = '(timed out after 6s)'"
+    "    })"
+    "  }"
     "};"
     "$rows | Format-Table -AutoSize | Out-String;"
+    "Write-Output (\"Total measured: \" + "
+    "  [math]::Round($total/1GB,2) + \" GB across these paths.\");"
     "Write-Output '';"
     "Write-Output '=== page file (WMI) ===';"
     "Get-CimInstance Win32_PageFileUsage 2>$null | "

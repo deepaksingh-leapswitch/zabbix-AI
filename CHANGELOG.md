@@ -2,6 +2,30 @@
 
 All notable releases. Format follows [keepachangelog.com](https://keepachangelog.com/).
 
+## v1.4.4 — 2026-05-11
+
+Fixes the regression v1.4.3 introduced: the robocopy fallback inside
+`diag.disk_usage` could itself take 30+ seconds on `C:\Windows`,
+pushing the script past Zabbix 7.4's 30 s hard-cap for global-script
+timeouts. Inv #11 on deepak-vm hit it (`diag.disk_usage` and
+`diag.windows_winsxs` both timed out) even though the host was idle.
+
+Changes:
+
+- **`diag.disk_usage` (Windows): drop robocopy fallback entirely.**
+  Stays FSO-only, ~10 s budget. Folders FSO can't measure get
+  `n/a (call diag.windows_winsxs)` in the Notes column. Faster than
+  v1.4.3 and matches Zabbix's 30 s limit comfortably.
+- **`diag.windows_winsxs`: per-target `Start-Job` + `Wait-Job -Timeout 6`.**
+  Each of the 11 paths gets its own 6-second budget. A slow WinSxS
+  shows `(timed out after 6s)` for just that row while the other ten
+  paths still report correctly.
+- Removed `$env:SystemRoot` itself from the target list (was redundant
+  with the specific subpaths and too broad to ever finish in budget).
+
+The bootstrap's `script.update` overwrites the v1.4.3 bodies on the
+next investigation.
+
 ## v1.4.3 — 2026-05-11
 
 **Two improvements driven by inv #9 on deepak-vm.**
