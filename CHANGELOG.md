@@ -2,6 +2,26 @@
 
 All notable releases. Format follows [keepachangelog.com](https://keepachangelog.com/).
 
+## v1.4.5 — 2026-05-11
+
+Two fixes for inv #12 on deepak-vm:
+
+- `diag.windows_winsxs` was returning `The command line is too long`.
+  The Start-Job machinery + recovery-commands strings pushed the
+  `-EncodedCommand` base64 to **9821 chars**, well past cmd.exe's
+  8191-char limit. Stripped the body to **3801 chars** (61% smaller):
+  removed the recovery-commands `Write-Output` block, the Win32_Page
+  FileUsage query, and the Microsoft.Update.Session COM query.
+  All deleted content is now in the tool **description** — the AI
+  reads it once when the tool list loads, no per-call cost. Same
+  measurement coverage (WinSxS, SoftwareDistribution, Installer,
+  pagefile, hiberfil, etc.).
+- The cleanup commands the AI should suggest (`cleanmgr /sagerun:1`,
+  `DISM /Online /Cleanup-Image /StartComponentCleanup`,
+  `powercfg /h off`, SoftwareDistribution\Download purge) are
+  embedded verbatim in the diag.windows_winsxs description so model
+  recommendations stay specific without script-output round-trips.
+
 ## v1.4.4 — 2026-05-11
 
 Fixes the regression v1.4.3 introduced: the robocopy fallback inside

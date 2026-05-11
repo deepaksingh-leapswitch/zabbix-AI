@@ -178,13 +178,27 @@ def register_tools() -> None:
     )
     _register_simple(
         "diag.windows_winsxs",
-        "Windows-only deep dive when diag.disk_usage shows a large "
-        "'unaccounted' delta. Sizes WinSxS, SoftwareDistribution, "
-        "Installer cache, event logs, hiberfil.sys, pagefile.sys, "
-        "swapfile.sys. Reports pending update count and prints the "
-        "exact cleanmgr / DISM / powercfg recovery commands (it does NOT "
-        "execute them). Call this AFTER diag.disk_usage on a Windows "
-        "host when most of the drive's used space isn't accounted for.",
+        "Windows-only. Sizes WinSxS, SoftwareDistribution\\Download, "
+        "Installer cache, System32\\config, Panther, event-log dir, "
+        "hiberfil.sys, pagefile.sys, swapfile.sys — each in its own "
+        "6-second budget so a slow target degrades to '(timed out 6s)' "
+        "without sinking the call. Returns a Path/SizeGB/Source table. "
+        "Call this AFTER diag.disk_usage on a Windows host when the "
+        "'unaccounted' delta is large.\n\n"
+        "If the report shows WinSxS or SoftwareDistribution is large, "
+        "the operator-side recovery commands are:\n"
+        "  cleanmgr /sagerun:1                                        "
+        "  -- GUI cleanup wizard\n"
+        "  DISM /Online /Cleanup-Image /StartComponentCleanup         "
+        "  -- WinSxS shrink (5-15 min, reversible)\n"
+        "  DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase "
+        " -- aggressive; cannot uninstall old updates after\n"
+        "  powercfg /h off                                            "
+        "  -- delete hiberfil.sys (saves ~ RAM size)\n"
+        "  net stop wuauserv ; "
+        "Remove-Item $env:SystemRoot\\SoftwareDistribution\\Download\\* "
+        "-Recurse -Force ; net start wuauserv\n"
+        "  -- purge Windows Update cache",
     )
 
     @register(

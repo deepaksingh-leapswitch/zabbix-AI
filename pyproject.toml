@@ -1,6 +1,6 @@
 [project]
 name = "zabbix-ai"
-version = "1.4.4"
+version = "1.4.5"
 description = "AI-assisted root-cause analysis for Zabbix monitoring"
 requires-python = ">=3.12"
 dependencies = [
