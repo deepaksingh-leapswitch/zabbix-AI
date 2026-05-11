@@ -51,6 +51,47 @@ class HostBriefingSettings(BaseModel):
     max_tokens: int = 2000
 
 
+class AutoInvestigateSettings(BaseModel):
+    """Settings for the Zabbix → webhook → auto-investigate path (v1.5).
+
+    When ``enabled`` is true, a Zabbix action POSTs to
+    ``/zabbix/auto-investigate`` on problem-open. The webhook authenticates
+    the request via HMAC-SHA256 over the body keyed by the secret in
+    ``webhook_secret_env``.
+    """
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+    enabled: bool = False
+    # Name of the env var holding the shared HMAC secret. The actual value is
+    # fetched lazily via the ``webhook_secret`` property so rotating the
+    # secret in the environment doesn't require an app restart.
+    webhook_secret_env: str = "ZABBIX_WEBHOOK_SECRET"
+    # Zabbix trigger severities are 0..5 (5 = Disaster). Default 4 = High.
+    min_severity: int = Field(default=4, ge=0, le=5)
+    # Empty list ⇒ all host groups allowed.
+    allowed_hostgroups: list[str] = Field(default_factory=list)
+    # Free-form Slack channel id or "#name" (Slack accepts either). When unset,
+    # the auto-investigate completes without a Slack post.
+    slack_channel: str | None = None
+
+    @property
+    def webhook_secret(self) -> SecretStr:
+        return SecretStr(os.environ.get(self.webhook_secret_env, ""))
+
+
+class BudgetSettings(BaseModel):
+    """Daily Anthropic spend cap for v1.5.
+
+    All values default to the no-op state (cap=0 means unlimited) so the
+    field can be added to ``Settings`` without breaking any existing
+    deployment that hasn't enabled it.
+    """
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+    daily_inr_cap: float = 0.0            # 0 = unlimited
+    over_budget_action: Literal["haiku_only", "pause", "warn"] = "haiku_only"
+    reset_hour_utc: int = Field(default=0, ge=0, le=23)
+    usd_to_inr: float = 83.0
+
+
 class AdminSettings(BaseModel):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
     session_secret_env: str
@@ -87,6 +128,8 @@ class Settings(BaseModel):
     admin: AdminSettings | None = None
     oauth_google: OAuthGoogleSettings | None = None
     host_briefing: HostBriefingSettings = Field(default_factory=HostBriefingSettings)
+    budget: BudgetSettings = Field(default_factory=BudgetSettings)
+    auto_investigate: AutoInvestigateSettings | None = None
 
 
 def load_settings(config_path: Path | str) -> Settings:

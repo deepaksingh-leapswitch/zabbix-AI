@@ -2,7 +2,11 @@
 {% block title %}HostBill — Connections{% endblock %}
 {% block content %}
 <h1>HostBill</h1>
-<p><a href="/admin/connections">&larr; All connections</a></p>
+<p>
+  <a href="/admin/connections">&larr; All connections</a>
+  &nbsp;|&nbsp;
+  <a href="/admin/connections/hostbill/links">Manage Zabbix → HostBill links</a>
+</p>
 <div class="card" style="max-width:520px;">
   <form method="post" action="/admin/connections/hostbill/save">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

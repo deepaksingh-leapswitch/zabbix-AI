@@ -15,7 +15,13 @@ from zabbix_ai.memory import (
     upsert_pattern,
 )
 from zabbix_ai.prompts import SYSTEM_PROMPT, build_cached_system_blocks
+from zabbix_ai.services.budget import BudgetExceededError, enforce_budget
 from zabbix_ai.services.host_briefing import build_host_briefing
+from zabbix_ai.services.hostbill_link import (
+    HostBillLink,
+    get_recent_tickets,
+    link_zabbix_host,
+)
 from zabbix_ai.tools import claude_tool_definitions, dispatch
 
 _log = logging.getLogger(__name__)
@@ -86,6 +92,16 @@ class InvestigationContext:
     problem_name: str = ""
     hostgroup: str = ""
     briefing_md: str = ""
+    # How the investigation was triggered. Mirrors the ``trigger_source``
+    # column on ``investigations`` (migration 007). The orchestrator itself
+    # does not consume this field — callers (e.g. the Zabbix auto-investigate
+    # webhook) write it onto the row out-of-band so v1.5 cost/observability
+    # queries can slice manual vs auto runs.
+    trigger_source: str = "manual"
+    # HostBill linkage populated by _enrich_context. ``hostbill_link`` is
+    # always present after enrichment — it may simply have linked_by='unlinked'.
+    hostbill_link: HostBillLink | None = None
+    recent_tickets: list = field(default_factory=list)
 
 @dataclass
 class InvestigationResult:
@@ -104,7 +120,8 @@ class Orchestrator:
                  memory: Memory | None = None,
                  hostbill_client=None,
                  scripts: dict[str, Any] | None = None,
-                 host_briefing_config: dict[str, Any] | None = None):
+                 host_briefing_config: dict[str, Any] | None = None,
+                 settings: Any = None):
         self.claude = claude
         self.audit = audit
         self.model = model
@@ -115,6 +132,14 @@ class Orchestrator:
         self.hostbill_client = hostbill_client
         self.scripts = scripts or {}
         self.host_briefing_config = host_briefing_config
+        # Settings handle is optional — when present we consult the daily
+        # Anthropic budget before any claude.create() call. Tests can pass
+        # ``settings=None`` to skip the budget gate entirely.
+        self.settings = settings
+        # Per-investigation effective model (may be downgraded by the
+        # budget gate). Reset at the top of each .investigate() call so
+        # one over-budget run doesn't permanently pin haiku.
+        self._model_for_this_run: str = model
 
     async def _enrich_context(self, ctx: InvestigationContext) -> None:
         """Pre-fetch problem and host data so write-back can compute a stable
@@ -179,13 +204,64 @@ class Orchestrator:
             except Exception as e:
                 _log.warning("host_briefing failed for %s: %s", ctx.hostid, e)
 
+        # ── HostBill linkage (best-effort) ─────────────────────────────────
+        # Always attempt linkage when we know the host; the linker degrades
+        # to ``linked_by='unlinked'`` if HostBill is unconfigured / down so
+        # this never blocks an investigation.
+        if ctx.hostid and ctx.instance and self.memory is not None:
+            try:
+                ctx.hostbill_link = await link_zabbix_host(
+                    memory=self.memory,
+                    hostbill_client=self.hostbill_client,
+                    zabbix_client=client,
+                    zabbix_instance=ctx.instance,
+                    zabbix_hostid=ctx.hostid,
+                )
+            except Exception as e:
+                _log.warning("hostbill link failed for %s/%s: %s",
+                             ctx.instance, ctx.hostid, e)
+                ctx.hostbill_link = None
+
+            link = ctx.hostbill_link
+            if link is not None and link.hostbill_client_id is not None:
+                try:
+                    ctx.recent_tickets = await get_recent_tickets(
+                        self.hostbill_client,
+                        client_id=link.hostbill_client_id,
+                        service_id=link.hostbill_service_id,
+                        days=30,
+                    )
+                except Exception as e:
+                    _log.debug("get_recent_tickets failed for %s: %s",
+                               link.hostbill_client_id, e)
+                    ctx.recent_tickets = []
+
     async def investigate(self, ctx: InvestigationContext) -> InvestigationResult:
         await self._enrich_context(ctx)
+        # Budget gate runs BEFORE any Claude call so we never burn one
+        # extra-paid token over the cap. The audit row is keyed by
+        # investigation_id=None because the investigation hasn't been
+        # created yet — the audit row's purpose is to log the *decision*,
+        # not the run.
+        effective_model = self.model
+        if self.memory is not None and self.settings is not None:
+            effective_model, reason = await enforce_budget(
+                self.memory, self.settings,
+                investigation_id=None,
+                model_requested=self.model,
+            )
+            if effective_model is None:
+                raise BudgetExceededError(
+                    f"Anthropic budget exhausted ({reason})"
+                )
+        self._model_for_this_run = effective_model
+
         start = time.monotonic()
         inv_id = await self.audit.log_start(
             source=ctx.source, instance=ctx.instance, eventid=ctx.eventid,
             ticket_id=ctx.ticket_id, customer_id=ctx.customer_id,
-            hostid=ctx.hostid, hostname=ctx.hostname, model=self.model,
+            hostid=ctx.hostid, hostname=ctx.hostname,
+            model=self._model_for_this_run,
         )
         system_blocks = build_cached_system_blocks(
             SYSTEM_PROMPT, claude_tool_definitions(), ctx.host_inventory_summary,
@@ -199,7 +275,7 @@ class Orchestrator:
         budget_exhausted = False
         while True:
             resp = await self.claude.create(
-                model=self.model, system=system_blocks,
+                model=self._model_for_this_run, system=system_blocks,
                 tools=claude_tool_definitions(),
                 messages=messages, max_tokens=2048,
             )
@@ -349,15 +425,31 @@ class Orchestrator:
         Event kinds: started, tool_call, tool_result, thinking, final.
         """
         await self._enrich_context(ctx)
+        # Same budget gate as the sync path — see .investigate() for the
+        # rationale.
+        effective_model = self.model
+        if self.memory is not None and self.settings is not None:
+            effective_model, reason = await enforce_budget(
+                self.memory, self.settings,
+                investigation_id=None,
+                model_requested=self.model,
+            )
+            if effective_model is None:
+                raise BudgetExceededError(
+                    f"Anthropic budget exhausted ({reason})"
+                )
+        self._model_for_this_run = effective_model
+
         import time as _time
         start = _time.monotonic()
         inv_id = await self.audit.log_start(
             source=ctx.source, instance=ctx.instance, eventid=ctx.eventid,
             ticket_id=ctx.ticket_id, customer_id=ctx.customer_id,
-            hostid=ctx.hostid, hostname=ctx.hostname, model=self.model,
+            hostid=ctx.hostid, hostname=ctx.hostname,
+            model=self._model_for_this_run,
         )
         yield {"event": "started", "data": {"investigation_id": inv_id,
-                                             "model": self.model}}
+                                             "model": self._model_for_this_run}}
 
         system_blocks = build_cached_system_blocks(
             SYSTEM_PROMPT, claude_tool_definitions(), ctx.host_inventory_summary,
@@ -372,7 +464,7 @@ class Orchestrator:
 
         while True:
             resp = await self.claude.create(
-                model=self.model, system=system_blocks,
+                model=self._model_for_this_run, system=system_blocks,
                 tools=claude_tool_definitions(),
                 messages=messages, max_tokens=2048,
             )

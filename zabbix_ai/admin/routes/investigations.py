@@ -1,12 +1,19 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import HTMLResponse
+from datetime import UTC, datetime
 
+from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+
+from zabbix_ai.admin.admin_audit import log_admin_event
 from zabbix_ai.admin.auth import login_required
 
 router = APIRouter()
 _PAGE_SIZE = 50
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 @router.get("/admin/investigations", response_class=HTMLResponse)
@@ -72,19 +79,32 @@ async def investigation_detail(
         """SELECT id, started_at, source, eventid, hostid, hostname,
                   model, duration_ms, tokens_in, tokens_out,
                   summary, root_cause, suggested_actions, confidence,
-                  pattern_signature
+                  pattern_signature,
+                  resolution_notes, resolution_at, resolution_by,
+                  resolution_source, outcome_inferred
            FROM investigations WHERE id=?""",
         (inv_id,),
     )
     if not row:
-        from fastapi.responses import Response
         return Response(status_code=404, content="Investigation not found")
 
     keys = ("id", "started_at", "source", "eventid", "hostid", "hostname",
             "model", "duration_ms", "tokens_in", "tokens_out",
             "summary", "root_cause", "suggested_actions", "confidence",
-            "pattern_signature")
+            "pattern_signature",
+            "resolution_notes", "resolution_at", "resolution_by",
+            "resolution_source", "outcome_inferred")
     inv = dict(zip(keys, row, strict=False))
+    # Decode outcome_inferred JSON for the template. We keep the raw text
+    # under outcome_inferred_raw so a future debug view can show it
+    # verbatim even if parsing fails.
+    inv["outcome_inferred_raw"] = inv.get("outcome_inferred")
+    if inv.get("outcome_inferred"):
+        import json as _json
+        try:
+            inv["outcome_inferred"] = _json.loads(inv["outcome_inferred"])
+        except (TypeError, ValueError):
+            inv["outcome_inferred"] = None
 
     # Tool transcript from audit_log
     audit_rows = await memory.fetchall(
@@ -102,4 +122,61 @@ async def investigation_detail(
             "inv": inv,
             "audit_rows": audit_rows,
         },
+    )
+
+
+@router.post("/admin/investigations/{inv_id}/resolution")
+async def investigation_set_resolution(
+    request: Request,
+    inv_id: int,
+    user: dict = Depends(login_required("operator")),
+    resolution_notes: str = Form(""),
+) -> Response:
+    """Operator/admin manual override for resolution_notes.
+
+    Records the override in admin_audit_log. Empty submissions clear
+    the resolution back to NULL (acts as a "remove" button).
+    """
+    memory = request.app.state.memory
+    existing = await memory.fetchone(
+        "SELECT id FROM investigations WHERE id=?", (inv_id,),
+    )
+    if not existing:
+        return Response(status_code=404, content="Investigation not found")
+
+    notes = (resolution_notes or "").strip()
+    if not notes:
+        await memory.execute(
+            """UPDATE investigations
+               SET resolution_notes=NULL,
+                   resolution_at=NULL,
+                   resolution_by=NULL,
+                   resolution_source=NULL
+               WHERE id=?""",
+            (inv_id,),
+        )
+        action = "cleared"
+    else:
+        await memory.execute(
+            """UPDATE investigations
+               SET resolution_notes=?,
+                   resolution_at=?,
+                   resolution_by=?,
+                   resolution_source=?
+               WHERE id=?""",
+            (notes, _now_iso(), user["username"], "manual", inv_id),
+        )
+        action = "set"
+
+    await log_admin_event(
+        memory,
+        event_type="investigation_resolution",
+        by_user=user["username"],
+        target=f"investigation:{inv_id}",
+        ip=getattr(request.client, "host", None) if request.client else None,
+        details={"action": action,
+                 "length": len(notes)},
+    )
+    return RedirectResponse(
+        f"/admin/investigations/{inv_id}", status_code=303,
     )

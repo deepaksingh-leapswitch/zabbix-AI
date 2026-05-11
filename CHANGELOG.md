@@ -2,6 +2,90 @@
 
 All notable releases. Format follows [keepachangelog.com](https://keepachangelog.com/).
 
+## v1.5.0 — 2026-05-11
+
+**Trust-loop release — cuts L1/L2 time on routine alerts.**
+
+The headline change: every Zabbix alert can now be **auto-investigated**
+without a human click, and the resolution narrative that L1/L2 type
+when they close the problem feeds forward so the *next* time the same
+alert fires, the AI starts with *"last time, deepak fixed it with
+DISM cleanup."*
+
+### Auto-investigate-on-alert
+
+- New endpoint `POST /zabbix/auto-investigate` (HMAC-signed body,
+  replay-protected via timestamp window).
+- Zabbix action helper: `POST /admin/connections/system/register-
+  zabbix-action` creates the matching Zabbix Action so the wire is
+  there with one click.
+- Per-hostgroup allowlist + severity gate + budget gate before the
+  investigation kicks off.
+- After completion, summary is written back to the Zabbix problem as
+  an `event.acknowledge` comment AND posted to a configured Slack
+  channel.
+- Rate-limited at 60 invocations/minute.
+
+### Resolution-notes feed-forward
+
+- `migrations/007_v1_5_schema.sql` adds `resolution_notes`,
+  `resolution_at`, `resolution_by`, `resolution_source` columns on
+  `investigations`.
+- Background poller (2 min interval) mines Zabbix `event.acknowledge`
+  messages on closed problems and writes them into the matching
+  investigation row, source=`zabbix_ack`. Resolves usernames via
+  `user.get` and ack actions via the action bitmask (1=close,
+  4=message).
+- Operator can also type/edit notes manually via the new
+  `POST /admin/investigations/{id}/resolution` route (operator+ role,
+  audit-logged).
+- `memory.find_similar_past_investigations` returns the notes;
+  system prompt requires the AI to LEAD its report with
+  *"Last time this fired (date, by user): <notes>"* when present.
+
+### Daily Anthropic budget cap
+
+- `services/budget.py` — daily ₹ cap with three over-budget actions:
+  `haiku_only` (downgrade), `pause` (refuse new investigations),
+  `warn` (log + proceed). Reset hour configurable.
+- Enforced inside the orchestrator before each Claude call.
+- New `budget_audit` table records every gated decision.
+- Cost dashboard headline: `Today: ₹X / ₹Y · Z% remaining · status:
+  ok | haiku-fallback | paused`.
+
+### Outcome inference
+
+- `services/outcome_inference.py` — 10-min poller compares the host's
+  relevant metric (disk %, memory free, CPU util) before vs after
+  `resolution_at`. If the metric moves in the recovery direction, a
+  JSON blob with the delta is stored on `investigations.outcome_inferred`
+  and surfaced on the investigation detail page.
+- Conservative threshold (10% absolute delta) to avoid false
+  "AI fix worked!" claims.
+
+### HostBill linkage foundation
+
+- New `host_hostbill_link` table caches per-host links
+  (Zabbix-instance + hostid → HostBill service/client).
+- Auto-matcher: Zabbix tag `hostbill_service_id` → IP match →
+  hostname/domain match. First hit wins; confidence labelled
+  `high`/`medium`/`low`.
+- Daily background sync refreshes the cache.
+- Admin UI at `/admin/connections/hostbill/links` shows all linked
+  hosts; filter to "Needs attention" surfaces unlinked +
+  low-confidence rows for manual override.
+- HostBill API client extended with `search_services`, `get_service`,
+  `get_client`, `get_tickets`, `is_reachable`. All methods degrade
+  gracefully when the HostBill API is unreachable — code lights up
+  the moment credentials arrive.
+
+### Tests
+
+366 tests, 0 failures, 0 lint errors. New: webhook signature (13),
+auto-investigate route (9), budget (12), outcome inference (13),
+resolution notes (16 unit + 4 integration), HostBill linker (7 unit
++ 5 integration).
+
 ## v1.4.5 — 2026-05-11
 
 Two fixes for inv #12 on deepak-vm:

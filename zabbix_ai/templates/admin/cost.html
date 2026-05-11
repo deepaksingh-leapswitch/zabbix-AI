@@ -7,6 +7,28 @@
   </span>
 </h1>
 
+{% if budget %}
+{# Headline budget line — red when <10% remains. The cap-disabled state
+   still surfaces today's spend so an operator sees something useful. #}
+{% if budget.limit %}
+  {% set pct_remain = budget.pct_remaining or 0 %}
+  {% set is_low = pct_remain < 10 %}
+  <p style="margin: -4px 2px 12px 2px; font-size: 13px;
+            {% if is_low %}color:#e26a6a;{% else %}color:#cdd3e0;{% endif %}">
+    <strong>Today:</strong>
+    &#8377;{{ '%.2f' % budget.spent }} / &#8377;{{ '%.2f' % budget.limit }} budget
+    · {{ '%.0f' % pct_remain }}% remaining
+    · status: <code>{{ budget.status }}</code>
+  </p>
+{% else %}
+  <p style="margin: -4px 2px 12px 2px; font-size: 13px; color:#8a93a6;">
+    <strong>Today:</strong> &#8377;{{ '%.2f' % budget.spent }} spent
+    · budget cap not configured
+    (<a href="/admin/connections/system" style="color:#8a93a6;">set one</a>)
+  </p>
+{% endif %}
+{% endif %}
+
 <div class="card">
   <div class="stat">
     <div class="v">&#8377;{{ '%.2f' % today_total_inr }}</div>

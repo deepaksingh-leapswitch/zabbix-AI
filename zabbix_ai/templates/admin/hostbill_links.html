@@ -1,0 +1,90 @@
+{% extends "admin/base.html" %}
+{% block title %}HostBill links — Connections{% endblock %}
+{% block content %}
+<h1>Zabbix → HostBill links</h1>
+<p>
+  <a href="/admin/connections">&larr; Connections</a>
+  &nbsp;|&nbsp;
+  <a href="/admin/connections/hostbill">HostBill connection</a>
+</p>
+
+<div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+  <a href="/admin/connections/hostbill/links?show=all"
+     class="{% if show=='all' %}active-tab{% endif %}"
+     style="padding:4px 10px;border:1px solid #2a2f3a;border-radius:4px;
+            background:{% if show=='all' %}#1a3a5a{% else %}#11141a{% endif %};
+            color:#e6e8ee;text-decoration:none;">All</a>
+  <a href="/admin/connections/hostbill/links?show=unlinked"
+     class="{% if show=='unlinked' %}active-tab{% endif %}"
+     style="padding:4px 10px;border:1px solid #2a2f3a;border-radius:4px;
+            background:{% if show=='unlinked' %}#3a2a1a{% else %}#11141a{% endif %};
+            color:#e6e8ee;text-decoration:none;">Needs attention</a>
+
+  <form method="post" action="/admin/connections/hostbill/links/refresh"
+        style="display:inline;margin-left:auto;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" style="background:#1a3a5a;">Refresh now</button>
+  </form>
+</div>
+
+{% if not links %}
+  <p style="color:#8a93a6;">No link rows yet. Run an investigation on
+  any host (or click <em>Refresh now</em>) to populate this table.</p>
+{% else %}
+<table style="width:100%;border-collapse:collapse;">
+  <thead>
+    <tr style="text-align:left;color:#8a93a6;border-bottom:1px solid #2a2f3a;">
+      <th style="padding:6px;">Instance</th>
+      <th style="padding:6px;">Zabbix hostid</th>
+      <th style="padding:6px;">HB service</th>
+      <th style="padding:6px;">HB client</th>
+      <th style="padding:6px;">Domain</th>
+      <th style="padding:6px;">Linked by</th>
+      <th style="padding:6px;">Confidence</th>
+      <th style="padding:6px;">Linked at</th>
+      <th style="padding:6px;"></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for l in links %}
+    {% set is_warn = (l.linked_by == 'unlinked') or (l.confidence == 'low') %}
+    <tr style="border-bottom:1px solid #1a1f2a;
+               background:{% if is_warn %}#2a1f15{% endif %};">
+      <td style="padding:6px;">{{ l.zabbix_instance }}</td>
+      <td style="padding:6px;font-family:monospace;">{{ l.zabbix_hostid }}</td>
+      <td style="padding:6px;">{{ l.hostbill_service_id or "—" }}</td>
+      <td style="padding:6px;">
+        {% if l.hostbill_client_name %}
+          {{ l.hostbill_client_name }} ({{ l.hostbill_client_id }})
+        {% else %}—{% endif %}
+      </td>
+      <td style="padding:6px;">{{ l.hostbill_domain or "—" }}</td>
+      <td style="padding:6px;font-size:12px;">{{ l.linked_by }}</td>
+      <td style="padding:6px;">
+        {% if l.confidence == 'high' %}
+          <span style="color:#6dd66d;">✓ high</span>
+        {% elif l.confidence == 'medium' %}
+          <span style="color:#e8c97a;">~ med</span>
+        {% else %}
+          <span style="color:#e88a8a;">! low</span>
+        {% endif %}
+      </td>
+      <td style="padding:6px;font-size:12px;color:#8a93a6;">
+        {{ l.linked_at[:19] if l.linked_at else "" }}
+      </td>
+      <td style="padding:6px;">
+        <a href="/admin/connections/hostbill/links/{{ l.zabbix_instance }}/{{ l.zabbix_hostid }}/edit">Edit</a>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<p style="font-size:12px;color:#8a93a6;margin-top:12px;">
+  Linked-by legend: <code>auto:tag</code> (Zabbix host tag <code>hostbill_service_id</code>),
+  <code>auto:ip</code> (single IP match), <code>auto:hostname</code> (domain match),
+  <code>manual</code> (operator-set), <code>unlinked</code> (no match found —
+  set manually).
+</p>
+{% endif %}
+{% endblock %}

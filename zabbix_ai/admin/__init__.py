@@ -19,6 +19,7 @@ from zabbix_ai.admin.routes import (
     connections,
     cost,
     dashboard,
+    hostbill_links,
     investigations,
     memory_routes,
     oauth_google,
@@ -103,6 +104,7 @@ def register_admin_components(app: FastAPI, settings: Settings) -> None:
     app.include_router(users_routes.router)
     app.include_router(cost.router)
     app.include_router(status.router)
+    app.include_router(hostbill_links.router)
     if settings.zabbix_ui is not None:
         app.include_router(zabbix_link.router)
     if settings.oauth_google is not None:

@@ -20,8 +20,14 @@ def register_tools() -> None:
     @register(
         "memory.find_similar_past_investigations",
         description=(
-            "Find past investigations on the same host or matching the same "
-            "pattern signature. Use when an alert looks familiar."
+            "Returns past investigations matching this host and/or pattern "
+            "signature, INCLUDING any resolution_notes captured when the "
+            "operator closed the Zabbix problem (resolution_at, resolution_by, "
+            "resolution_source). If a past investigation has resolution_notes, "
+            "LEAD your current report with 'Last time this fired "
+            "(<resolution_at>, by <resolution_by>), the resolution was: "
+            "<resolution_notes>. Verify whether that fix applies now before "
+            "recommending anything else.'"
         ),
         schema={"type": "object",
                 "properties": {

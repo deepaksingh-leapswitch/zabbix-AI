@@ -21,6 +21,39 @@
   </div>
 </div>
 
+{% if inv.resolution_notes %}
+<div class="card" style="border-color: #385a3d;">
+  <h1>Resolution</h1>
+  <p style="font-size: 12px; color: #8a93a6; margin-top: 0;">
+    {{ inv.resolution_at or '—' }}
+    · by <strong>{{ inv.resolution_by or '—' }}</strong>
+    · source: <code>{{ inv.resolution_source or '—' }}</code>
+  </p>
+  <p style="font-size: 13px; white-space: pre-wrap;">{{ inv.resolution_notes }}</p>
+</div>
+{% endif %}
+
+{% if user and user.role in ('operator', 'admin') %}
+<div class="card">
+  <h1>{% if inv.resolution_notes %}Edit{% else %}Add{% endif %} resolution</h1>
+  <form method="post" action="/admin/investigations/{{ inv.id }}/resolution">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <p style="font-size: 12px; color: #8a93a6;">
+      What did you actually do to fix this? Future investigations of the same
+      pattern will lead with these notes. Submit empty to clear.
+    </p>
+    <textarea name="resolution_notes" rows="4"
+              style="width: 100%; padding: 8px; background: #0f1115;
+                     color: #e6e8ee; border: 1px solid #2a2f3a;
+                     border-radius: 4px; font-family: inherit; font-size: 13px;"
+              >{{ inv.resolution_notes or '' }}</textarea>
+    <p style="margin-top: 8px;">
+      <button type="submit">Save resolution</button>
+    </p>
+  </form>
+</div>
+{% endif %}
+
 {% if inv.summary %}
 <div class="card">
   <h1>Summary</h1>
@@ -39,6 +72,39 @@
 <div class="card">
   <h1>Suggested actions</h1>
   <p style="font-size: 13px; white-space: pre-wrap;">{{ inv.suggested_actions }}</p>
+</div>
+{% endif %}
+
+{# Outcome inference (v1.5). Rendered only for resolved investigations.
+   Pending state surfaces explicitly so operators know analysis is
+   running async, not silently missing. #}
+{% if inv.resolution_at %}
+<div class="card">
+  <h1>Outcome analysis</h1>
+  {% if inv.outcome_inferred %}
+    {% set oi = inv.outcome_inferred %}
+    <p style="font-size: 13px; margin: 0 0 6px 0;">
+      Metric <code>{{ oi.metric }}</code> moved from
+      <strong>{{ '%.2f' % oi.before }}</strong> to
+      <strong>{{ '%.2f' % oi.after }}</strong>
+      (Δ {{ '%+.2f' % oi.delta }})
+      {% if oi.recovered %}
+        — <span style="color:#6dd58c;">appears to confirm the resolution was effective</span>.
+      {% else %}
+        — <span style="color:#e2a96a;">no clear recovery signal in the metric</span>.
+      {% endif %}
+    </p>
+    <p style="font-size: 11px; color:#8a93a6; margin: 0;">
+      direction: <code>{{ oi.direction }}</code>
+      · samples: {{ oi.samples_count }}
+      · confidence: {{ oi.confidence }}
+      · evaluated: {{ oi.evaluated_at[:19] if oi.evaluated_at else '—' }}
+    </p>
+  {% else %}
+    <p style="font-size: 13px; color:#8a93a6; margin: 0;">
+      Outcome analysis pending.
+    </p>
+  {% endif %}
 </div>
 {% endif %}
 

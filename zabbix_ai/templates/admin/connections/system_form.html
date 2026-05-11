@@ -108,10 +108,160 @@
           </div>
         </div>
       </div>
+      <hr style="border:none;border-top:1px solid #2a3042;margin:6px 0;">
+      <p style="font-size:12px;color:#8a93a6;margin:0 0 8px 0;font-weight:600;">
+        Daily Anthropic budget
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div>
+          <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+            Daily INR cap
+          </label>
+          <input name="budget_daily_inr_cap" type="number" min="0" step="0.01"
+                 value="{{ current.budget_daily_inr_cap }}"
+                 style="width:100%;box-sizing:border-box;">
+          <p style="font-size:11px;color:#8a93a6;margin:4px 0 0 0;">
+            0 = unlimited (no enforcement). Spend is computed from the same
+            pricing table the cost dashboard uses.
+          </p>
+        </div>
+        <div>
+          <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+            Over-budget action
+          </label>
+          <select name="budget_over_budget_action"
+                  style="width:100%;box-sizing:border-box;">
+            <option value="haiku_only" {% if current.budget_over_budget_action == 'haiku_only' %}selected{% endif %}>haiku_only (downgrade to haiku)</option>
+            <option value="pause" {% if current.budget_over_budget_action == 'pause' %}selected{% endif %}>pause (block new investigations)</option>
+            <option value="warn" {% if current.budget_over_budget_action == 'warn' %}selected{% endif %}>warn (allow + audit only)</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+            Reset hour (UTC)
+          </label>
+          <input name="budget_reset_hour_utc" type="number" min="0" max="23"
+                 value="{{ current.budget_reset_hour_utc }}"
+                 style="width:100%;box-sizing:border-box;">
+          <p style="font-size:11px;color:#8a93a6;margin:4px 0 0 0;">
+            Hour (0–23 UTC) at which the daily budget rolls over.
+          </p>
+        </div>
+        <div>
+          <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+            USD → INR rate
+          </label>
+          <input name="budget_usd_to_inr" type="number" min="1" step="0.01"
+                 value="{{ current.budget_usd_to_inr }}"
+                 style="width:100%;box-sizing:border-box;">
+          <p style="font-size:11px;color:#8a93a6;margin:4px 0 0 0;">
+            FX rate for converting Anthropic USD pricing to INR.
+          </p>
+        </div>
+      </div>
+      <hr style="border:none;border-top:1px solid #2a3042;margin:6px 0;">
+      <p style="font-size:12px;color:#8a93a6;margin:0 0 8px 0;font-weight:600;">
+        Auto-investigate (Zabbix → webhook)
+      </p>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div>
+          <label style="font-size:12px;color:#8a93a6;display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input name="auto_investigate_enabled" type="checkbox"
+                   {% if current.auto_investigate_enabled %}checked{% endif %}>
+            Auto-investigate enabled
+          </label>
+          <p style="font-size:11px;color:#8a93a6;margin:4px 0 0 0;">
+            When enabled, a Zabbix trigger action can POST to
+            <code>/zabbix/auto-investigate</code> on problem-open and the AI
+            will write its summary back to the event as a comment.
+          </p>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div>
+            <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+              Minimum severity
+            </label>
+            <select name="auto_investigate_min_severity"
+                    style="width:100%;box-sizing:border-box;">
+              {% for sev_id, sev_label in [(0,'0 — Not classified'),(1,'1 — Information'),(2,'2 — Warning'),(3,'3 — Average'),(4,'4 — High'),(5,'5 — Disaster')] %}
+              <option value="{{ sev_id }}" {% if current.auto_investigate_min_severity == sev_id %}selected{% endif %}>{{ sev_label }}</option>
+              {% endfor %}
+            </select>
+            <p style="font-size:11px;color:#8a93a6;margin:4px 0 0 0;">
+              Problems below this severity are silently skipped.
+            </p>
+          </div>
+          <div>
+            <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+              Slack channel (optional)
+            </label>
+            <input name="auto_investigate_slack_channel" type="text"
+                   value="{{ current.auto_investigate_slack_channel }}"
+                   placeholder="#ops-alerts or C1234567890"
+                   style="width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;">
+            <p style="font-size:11px;color:#8a93a6;margin:4px 0 0 0;">
+              Where the completed AI summary is also posted. Leave blank to
+              disable Slack posting for auto-investigations.
+            </p>
+          </div>
+        </div>
+        <div>
+          <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+            Allowed host groups (CSV)
+          </label>
+          <input name="auto_investigate_allowed_hostgroups" type="text"
+                 value="{{ current.auto_investigate_allowed_hostgroups }}"
+                 placeholder="Production, Pune-DC"
+                 style="width:100%;box-sizing:border-box;">
+          <p style="font-size:11px;color:#8a93a6;margin:4px 0 0 0;">
+            Comma-separated. Leave blank to allow every host group.
+          </p>
+        </div>
+      </div>
       <div>
         <button type="submit">Save</button>
       </div>
     </div>
   </form>
+  <hr style="border:none;border-top:1px solid #2a3042;margin:16px 0;">
+  <form method="post" action="/admin/connections/system/register-zabbix-action"
+        onsubmit="event.preventDefault(); registerZabbixAction(this);">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <p style="font-size:12px;color:#8a93a6;margin:0 0 8px 0;font-weight:600;">
+      Register Zabbix action
+    </p>
+    <p style="font-size:11px;color:#8a93a6;margin:0 0 8px 0;">
+      Idempotent: creates the
+      <code>zabbix-rca-AI auto-investigate</code> action on the chosen
+      Zabbix instance if it doesn't already exist. Re-run after rotating
+      the webhook secret to refresh the sample signature.
+    </p>
+    <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:8px;align-items:end;">
+      <input name="instance" type="text"
+             placeholder="instance name (e.g. monitoring)"
+             style="width:100%;box-sizing:border-box;">
+      <input name="webhook_url" type="text"
+             placeholder="https://zabbix-ai.example.com/zabbix/auto-investigate"
+             style="width:100%;box-sizing:border-box;">
+      <button type="submit">Register</button>
+    </div>
+    <div id="register-action-result" style="margin-top:8px;font-size:12px;"></div>
+  </form>
+  <script>
+  async function registerZabbixAction(form) {
+    const out = document.getElementById('register-action-result');
+    out.textContent = 'Registering…';
+    const body = new FormData(form);
+    const resp = await fetch(form.action, {
+      method: 'POST',
+      body: body,
+      headers: {'X-CSRF-Token': body.get('csrf_token') || ''},
+    });
+    let data = {};
+    try { data = await resp.json(); } catch (e) { /* non-JSON */ }
+    out.textContent = (data.message || ('HTTP ' + resp.status));
+    out.style.color = (resp.ok && data.ok) ? '#7dd87d' : '#e07b6f';
+  }
+  </script>
 </div>
 {% endblock %}

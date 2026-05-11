@@ -29,4 +29,4 @@ async def test_migrations_idempotent(memory):
         "SELECT version FROM schema_version ORDER BY version",
     )
     # Each migrations/NNN_*.sql file inserts its own version row.
-    assert rows == [(1,), (2,), (3,), (4,), (5,), (6,)]
+    assert rows == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]

@@ -1,0 +1,85 @@
+{% extends "admin/base.html" %}
+{% block title %}Edit HostBill link — Connections{% endblock %}
+{% block content %}
+<h1>Edit HostBill link</h1>
+<p><a href="/admin/connections/hostbill/links">&larr; All links</a></p>
+
+<div class="card" style="max-width:560px;">
+  <div style="font-size:12px;color:#8a93a6;margin-bottom:12px;">
+    <strong>Zabbix instance:</strong> {{ instance }}
+    &nbsp;·&nbsp;
+    <strong>hostid:</strong> {{ hostid }}
+  </div>
+
+  {% if link %}
+  <div style="font-size:12px;color:#8a93a6;margin-bottom:12px;
+              padding:8px;background:#0d1015;border-radius:4px;">
+    Current link source: <code>{{ link.linked_by }}</code>
+    &nbsp;·&nbsp; confidence <code>{{ link.confidence }}</code>
+    {% if link.linked_at %}
+      &nbsp;·&nbsp; linked at {{ link.linked_at[:19] }}
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <form method="post"
+        action="/admin/connections/hostbill/links/{{ instance }}/{{ hostid }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div style="display:flex;flex-direction:column;gap:12px;">
+
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          HostBill service id
+        </label>
+        <input name="hostbill_service_id" type="text" inputmode="numeric"
+               pattern="[0-9]*"
+               value="{{ link.hostbill_service_id if link and link.hostbill_service_id is not none else '' }}"
+               style="width:100%;box-sizing:border-box;"
+               placeholder="e.g. 12345">
+      </div>
+
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          HostBill client id
+        </label>
+        <input name="hostbill_client_id" type="text" inputmode="numeric"
+               pattern="[0-9]*"
+               value="{{ link.hostbill_client_id if link and link.hostbill_client_id is not none else '' }}"
+               style="width:100%;box-sizing:border-box;"
+               placeholder="e.g. 7890">
+      </div>
+
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          Client name (optional)
+        </label>
+        <input name="hostbill_client_name" type="text"
+               value="{{ link.hostbill_client_name if link else '' }}"
+               style="width:100%;box-sizing:border-box;"
+               placeholder="e.g. Acme Pvt Ltd">
+      </div>
+
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          Service domain (optional)
+        </label>
+        <input name="hostbill_domain" type="text"
+               value="{{ link.hostbill_domain if link else '' }}"
+               style="width:100%;box-sizing:border-box;"
+               placeholder="e.g. plesk1.example.com">
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button type="submit">Save link</button>
+        <a href="/admin/connections/hostbill/links"
+           style="margin-left:8px;font-size:13px;">Cancel</a>
+      </div>
+    </div>
+  </form>
+
+  <p style="font-size:11px;color:#5a6275;margin-top:14px;">
+    Manual links override the auto-matcher. The next sync run won't
+    overwrite this row.
+  </p>
+</div>
+{% endblock %}

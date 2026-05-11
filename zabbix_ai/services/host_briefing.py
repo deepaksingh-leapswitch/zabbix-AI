@@ -127,11 +127,18 @@ async def build_host_briefing(
     os_kind: str = "linux",
     max_tokens: int = 2000,
     memory: Memory | None = None,
+    hostbill_link: Any = None,
+    recent_tickets: list[dict] | None = None,
 ) -> str:
     """Return a Markdown host briefing, capped at roughly max_tokens.
 
     Sections dropped (lowest priority first) if over the token cap:
     forecast_hits → past_investigations → patterns → 30-day history.
+
+    When ``hostbill_link`` is supplied and has a HostBill client_id, a
+    "Customer (HostBill)" section is rendered between the host header and
+    the open-problems section. When the link is unlinked or HostBill is
+    unreachable, the section is omitted silently.
     """
     time_from = int(time.time()) - days * 86400
 
@@ -151,6 +158,11 @@ async def build_host_briefing(
     # ── Section 1: Host header ───────────────────────────────────────────────
     header_lines = _render_header(host_info, hostid, os_kind)
     sections["header"] = "\n".join(header_lines)
+
+    # ── Section 1b: HostBill customer (only when linked) ─────────────────────
+    hb_md = _render_hostbill(hostbill_link, recent_tickets)
+    if hb_md:
+        sections["hostbill"] = hb_md
 
     # ── Section 2: Open problems ─────────────────────────────────────────────
     open_names: set[str] = set()
@@ -443,6 +455,75 @@ def _render_past(investigations: list[dict]) -> str:
         sig = (inv.get("pattern_signature") or "")[:16]
         summary = (inv.get("summary") or inv.get("root_cause") or "")[:60]
         lines.append(f"| {inv.get('id')} | {age} | `{sig}` | {summary} |")
+
+    # Surface any captured resolutions — the AI must lead with these.
+    resolved = [inv for inv in investigations if inv.get("resolution_notes")]
+    if resolved:
+        lines.append("")
+        lines.append("**Prior resolutions (READ FIRST — lead your report with these)**")
+        lines.append("")
+        for inv in resolved:
+            when = (inv.get("resolution_at") or "")[:10]  # YYYY-MM-DD
+            who = inv.get("resolution_by") or "?"
+            sig = (inv.get("pattern_signature") or "")[:16]
+            summary = (inv.get("summary") or inv.get("root_cause") or "")[:80]
+            notes = (inv.get("resolution_notes") or "").strip().replace(
+                "\n", " ",
+            )[:400]
+            lines.append(
+                f"- {when}: signature=`{sig}`, "
+                f"confidence={inv.get('confidence') or '—'}"
+            )
+            if summary:
+                lines.append(f"    summary: {summary}")
+            lines.append(f"    resolution: {who} — {notes}")
+    return "\n".join(lines)
+
+
+def _render_hostbill(link: Any, recent_tickets: list[dict] | None) -> str:
+    """Render the Customer (HostBill) section.
+
+    Returns an empty string when ``link`` is None, unlinked, or has no
+    HostBill client_id — the assembler then silently drops the section.
+    """
+    if link is None:
+        return ""
+    client_id = getattr(link, "hostbill_client_id", None)
+    service_id = getattr(link, "hostbill_service_id", None)
+    if not client_id:
+        return ""
+
+    client_name = getattr(link, "hostbill_client_name", "") or "—"
+    domain = getattr(link, "hostbill_domain", "") or "—"
+
+    tickets = recent_tickets or []
+    open_count = 0
+    closed_count = 0
+    for t in tickets:
+        status = str(t.get("status", "")).strip().lower()
+        if status in {"closed", "resolved", "answered"}:
+            closed_count += 1
+        else:
+            open_count += 1
+
+    lines = ["### Customer (HostBill)", ""]
+    lines.append(f"Client: {client_name} (id {client_id})")
+    if service_id is not None:
+        lines.append(f"Service: {domain} (id {service_id})")
+    else:
+        lines.append(f"Service: {domain}")
+    lines.append(
+        f"Recent tickets (30 d): {open_count} open / {closed_count} closed"
+    )
+    # Show up to five recent tickets, newest first.
+    for t in tickets[:5]:
+        tid = t.get("id") or t.get("ticket_id") or "?"
+        when = (
+            t.get("date") or t.get("lastreply") or t.get("date_opened") or ""
+        )[:10]
+        status = str(t.get("status", "")).strip().lower() or "open"
+        subj = (t.get("subject") or t.get("title") or "").strip()[:100]
+        lines.append(f"  - #{tid} {when} [{status}]  Subject: {subj}")
     return "\n".join(lines)
 
 
@@ -464,6 +545,7 @@ def _age_str_iso(ts: str | None) -> str:
 
 _SECTION_RENDER_ORDER = [
     "header",
+    "hostbill",
     "open_problems",
     "history",
     "metrics",

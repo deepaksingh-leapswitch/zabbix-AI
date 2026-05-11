@@ -4,6 +4,8 @@ from pydantic import HttpUrl, SecretStr
 
 from zabbix_ai.admin import connections_store as cs
 from zabbix_ai.config import (
+    AutoInvestigateSettings,
+    BudgetSettings,
     HostBillSettings,
     HostBriefingSettings,
     OAuthGoogleSettings,
@@ -144,5 +146,47 @@ async def overlay_settings(settings: Settings, memory: Memory,
                                   settings.host_briefing.days)),
                 max_tokens=int(cfg.get("host_briefing_max_tokens",
                                         settings.host_briefing.max_tokens)),
+            )
+        # Budget settings overlay — only touch settings.budget when at
+        # least one budget_* key exists in the DB row, so a deployment
+        # that hasn't enabled the dashboard widget still keeps its
+        # file/default settings.budget.
+        budget_keys = {"budget_daily_inr_cap", "budget_over_budget_action",
+                       "budget_reset_hour_utc", "budget_usd_to_inr"}
+        if budget_keys & set(cfg.keys()):
+            settings.budget = BudgetSettings(
+                daily_inr_cap=float(cfg.get("budget_daily_inr_cap",
+                                             settings.budget.daily_inr_cap)),
+                over_budget_action=str(cfg.get("budget_over_budget_action",
+                                                settings.budget.over_budget_action)),
+                reset_hour_utc=int(cfg.get("budget_reset_hour_utc",
+                                            settings.budget.reset_hour_utc)),
+                usd_to_inr=float(cfg.get("budget_usd_to_inr",
+                                          settings.budget.usd_to_inr)),
+            )
+        # Auto-investigate overlay — only build a fresh AutoInvestigateSettings
+        # when the admin has touched the form (any auto_investigate_* key
+        # present). Hostgroups are stored as a CSV string in the DB to keep
+        # the row a flat key→value map.
+        ai_keys = {"auto_investigate_enabled", "auto_investigate_min_severity",
+                   "auto_investigate_allowed_hostgroups",
+                   "auto_investigate_slack_channel"}
+        if ai_keys & set(cfg.keys()):
+            base = settings.auto_investigate or AutoInvestigateSettings()
+            hg_raw = cfg.get("auto_investigate_allowed_hostgroups", "")
+            if isinstance(hg_raw, list):
+                hostgroups = [str(g) for g in hg_raw if str(g).strip()]
+            else:
+                hostgroups = [g.strip() for g in str(hg_raw).split(",")
+                              if g.strip()]
+            slack_channel = (cfg.get("auto_investigate_slack_channel",
+                                      base.slack_channel) or "") or None
+            settings.auto_investigate = AutoInvestigateSettings(
+                enabled=bool(cfg.get("auto_investigate_enabled", base.enabled)),
+                webhook_secret_env=base.webhook_secret_env,
+                min_severity=int(cfg.get("auto_investigate_min_severity",
+                                          base.min_severity)),
+                allowed_hostgroups=hostgroups,
+                slack_channel=slack_channel,
             )
     return settings

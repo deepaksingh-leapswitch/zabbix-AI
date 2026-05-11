@@ -29,6 +29,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if settings.admin is not None:
                 from zabbix_ai.admin import setup_admin
                 await setup_admin(app, settings, mem)
+
+            # v1.5 background workers — best-effort, never break startup.
+            try:
+                from zabbix_ai.services.resolution_notes import (
+                    start_resolution_poller,
+                )
+                start_resolution_poller(app, settings, mem,
+                                         getattr(app.state, "zabbix_clients", {}))
+            except Exception:
+                pass
+            try:
+                from zabbix_ai.services.outcome_inference import (
+                    start_outcome_inference,
+                )
+                start_outcome_inference(app, settings, mem,
+                                         getattr(app.state, "zabbix_clients", {}))
+            except Exception:
+                pass
+            try:
+                from zabbix_ai.services.hostbill_link import (
+                    start_hostbill_sync,
+                )
+                start_hostbill_sync(app, settings, mem)
+            except Exception:
+                pass
+
             yield
         finally:
             await mem.close()
@@ -52,6 +78,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings is not None and settings.zabbix_ui is not None:
         from zabbix_ai.adapters.zabbix_ui import build_router as build_ui_router
         app.include_router(build_ui_router(settings))
+
+    # Auto-investigate webhook (always mounted; returns 503 when settings.
+    # auto_investigate is unset, so it's safe to leave on).
+    if settings is not None:
+        from zabbix_ai.adapters.zabbix_webhook import (
+            build_router as build_webhook_router,
+        )
+        app.include_router(build_webhook_router(settings))
 
     return app
 

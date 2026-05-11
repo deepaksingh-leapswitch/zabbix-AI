@@ -188,3 +188,5 @@ pytest -v
 - v1.3 — Host briefing pre-fetch (token-efficient correlation across 30-day metrics + history) ✓
 - v1.3.1 — Security hardening (CSRF, rate limit, single-use tokens, SSRF deny-list, audit log, TOTP replay-cache) ✓
 - v1.4.0 — Admin: user management UI, cost dashboard, system status page. Tools: diag.network, diag.cert_expiry, diag.smart. Agent-side install guide ✓
+- v1.4.{1,2,3,4,5} — diag.disk_usage iterations + diag.windows_winsxs (Windows space consumers) ✓
+- v1.5.0 — Trust loop: auto-investigate-on-alert webhook, resolution-notes feed-forward, daily ₹ budget cap, outcome inference, HostBill linkage foundation ✓

@@ -112,6 +112,7 @@ class InvestigationRunner:
                 "days": hb_cfg.days,
                 "max_tokens": hb_cfg.max_tokens,
             },
+            settings=self.settings,
         )
         return self
 

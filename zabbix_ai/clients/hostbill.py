@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
+
+_log = logging.getLogger(__name__)
 
 
 class HostBillError(Exception):
@@ -14,6 +17,13 @@ class HostBillClient:
 
     HostBill expects form-encoded POSTs with api_id, api_key, call=<method>,
     plus method-specific params. Responses are JSON {"success": 0|1, ...}.
+
+    The "search_*"/"get_*" methods used by the host linker are written to
+    degrade gracefully — when the API is unreachable, returns missing creds,
+    or returns an error envelope they return ``[]`` / ``None`` rather than
+    raising. The original ``search_tickets``/``get_ticket_details``/
+    ``get_client_details`` callers (`tools.memory`) still see the legacy
+    raising behaviour via ``_call``.
     """
 
     def __init__(self, *, api_url: str, api_id: str, api_key: str,
@@ -37,6 +47,24 @@ class HostBillClient:
             raise HostBillError(f"{method}: {data.get('error', 'unknown')}")
         return data
 
+    async def _try_call(self, method: str, **params: Any) -> dict[str, Any] | None:
+        """Like _call but swallows every error and returns None.
+
+        Used by the host-linker code paths where the HostBill API may not yet
+        be configured / reachable — we never want a missing-API to bubble up
+        through the orchestrator's enrichment step.
+        """
+        try:
+            return await self._call(method, **params)
+        except (httpx.HTTPError, HostBillError, ValueError) as e:
+            _log.debug("hostbill._try_call(%s) failed: %s", method, e)
+            return None
+        except Exception as e:  # defensive: never raise out of this helper
+            _log.warning("hostbill._try_call(%s) unexpected: %s", method, e)
+            return None
+
+    # ── Legacy, raising API (kept stable for tools.memory + tests) ───────────
+
     async def search_tickets(self, *, query: str = "", status: str = "Closed",
                              limit: int = 20,
                              department_id: int | None = None) -> list[dict]:
@@ -54,3 +82,93 @@ class HostBillClient:
     async def get_client_details(self, client_id: int) -> dict[str, Any]:
         data = await self._call("getClientDetails", id=client_id)
         return data.get("client", {}) or {}
+
+    # ── Linker-friendly, non-raising API ──────────────────────────────────────
+
+    async def search_services(self, *, ip: str | None = None,
+                              domain: str | None = None) -> list[dict]:
+        """Find HostBill services matching an IP or a domain.
+
+        Returns an empty list if the API is unreachable, returns no match,
+        or returns an error envelope. Never raises.
+
+        The real HostBill endpoint shape for service search is
+        ``getAccounts`` (with filter ``ip`` / ``domain``); if that's not
+        available on a given deployment, the same payload is returned by
+        ``getServices`` with similar filters. We try the documented call
+        first and fall back if the API rejects it.
+        """
+        if ip is None and domain is None:
+            return []
+        for method in ("getAccounts", "getServices"):
+            params: dict[str, Any] = {}
+            if ip is not None:
+                params["ip"] = ip
+            if domain is not None:
+                params["domain"] = domain
+            data = await self._try_call(method, **params)
+            if data is None:
+                continue
+            # Accept several response shapes — HostBill's API is uneven
+            # across versions. First non-empty list wins.
+            for key in ("accounts", "services", "results"):
+                rows = data.get(key)
+                if isinstance(rows, list) and rows:
+                    return rows
+                if isinstance(rows, dict) and rows:
+                    # API sometimes returns id-keyed dict instead of list
+                    return list(rows.values())
+        return []
+
+    async def get_service(self, service_id: int) -> dict | None:
+        """Return the HostBill service dict, or None on any failure."""
+        data = await self._try_call("getAccountDetails", id=service_id)
+        if data is None:
+            data = await self._try_call("getService", id=service_id)
+        if data is None:
+            return None
+        for key in ("account", "service", "details"):
+            row = data.get(key)
+            if isinstance(row, dict) and row:
+                return row
+        return None
+
+    async def get_client(self, client_id: int) -> dict | None:
+        """Return the HostBill client dict, or None on any failure."""
+        data = await self._try_call("getClientDetails", id=client_id)
+        if data is None:
+            return None
+        for key in ("client", "details"):
+            row = data.get(key)
+            if isinstance(row, dict) and row:
+                return row
+        return None
+
+    async def get_tickets(self, *, client_id: int,
+                          service_id: int | None = None,
+                          date_from: str | None = None) -> list[dict]:
+        """Return tickets for a client (and optionally a service).
+
+        Returns ``[]`` rather than raising on transport/API errors.
+        """
+        params: dict[str, Any] = {"client_id": client_id, "limit": 100}
+        if service_id is not None:
+            params["service_id"] = service_id
+        if date_from is not None:
+            params["date_from"] = date_from
+        data = await self._try_call("getTickets", **params)
+        if data is None:
+            return []
+        rows = data.get("tickets")
+        if isinstance(rows, list):
+            return rows
+        if isinstance(rows, dict):
+            return list(rows.values())
+        return []
+
+    async def is_reachable(self) -> bool:
+        """Cheap reachability probe — returns False on any error."""
+        # getTickets with limit=1 is the smallest legal call we know works
+        # in the existing /admin/connections/hostbill/test handler.
+        data = await self._try_call("getTickets", limit=1)
+        return data is not None

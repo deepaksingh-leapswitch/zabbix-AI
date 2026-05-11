@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 from zabbix_ai.admin.auth import login_required
 from zabbix_ai.admin.rate_limit import limiter
+from zabbix_ai.services.budget import remaining_budget_inr
 from zabbix_ai.services.pricing import (
     DEFAULT_USD_TO_INR,
     MODEL_PRICING,
@@ -213,6 +214,18 @@ async def cost_dashboard(
         for m, p in MODEL_PRICING.items()
     ]
 
+    # Budget headline. ``budget`` is always present on Settings — when the
+    # cap is 0 we still return a dict (status="disabled") so the template
+    # can render a uniform line without branching on ``None``.
+    settings = request.app.state.settings
+    budget_summary = None
+    try:
+        budget_summary = await remaining_budget_inr(memory, settings)
+    except Exception:
+        # Defensive: the cost dashboard must not 500 if a future
+        # settings refactor breaks the budget service.
+        budget_summary = None
+
     return request.app.state.templates.TemplateResponse(
         request, "admin/cost.html",
         {
@@ -231,6 +244,7 @@ async def cost_dashboard(
             "top_sources": top_sources,
             "fx_rate": fx,
             "pricing_summary": pricing_summary,
+            "budget": budget_summary,
         },
     )
 

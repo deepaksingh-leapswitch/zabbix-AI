@@ -144,7 +144,9 @@ async def find_similar_past_investigations(
         return []
     sql = (
         "SELECT id, started_at, hostid, hostname, pattern_signature, "
-        "       summary, root_cause, confidence "
+        "       summary, root_cause, confidence, "
+        "       resolution_notes, resolution_at, resolution_by, "
+        "       resolution_source "
         "FROM investigations "
         f"WHERE {' AND '.join(where)} "
         "ORDER BY id DESC LIMIT ?"
@@ -152,7 +154,9 @@ async def find_similar_past_investigations(
     params.append(limit)
     rows = await memory.fetchall(sql, tuple(params))
     keys = ("id", "started_at", "hostid", "hostname", "pattern_signature",
-            "summary", "root_cause", "confidence")
+            "summary", "root_cause", "confidence",
+            "resolution_notes", "resolution_at", "resolution_by",
+            "resolution_source")
     return [dict(zip(keys, r, strict=False)) for r in rows]
 
 

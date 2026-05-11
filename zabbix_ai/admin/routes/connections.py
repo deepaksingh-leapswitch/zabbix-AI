@@ -780,6 +780,47 @@ async def system_form(
                 "host_briefing_max_tokens",
                 settings.host_briefing.max_tokens,
             ),
+            # Budget fields — fall back to the in-process Settings.budget
+            # so a freshly installed instance still shows the defaults.
+            "budget_daily_inr_cap": cfg.get(
+                "budget_daily_inr_cap",
+                settings.budget.daily_inr_cap,
+            ),
+            "budget_over_budget_action": cfg.get(
+                "budget_over_budget_action",
+                settings.budget.over_budget_action,
+            ),
+            "budget_reset_hour_utc": cfg.get(
+                "budget_reset_hour_utc",
+                settings.budget.reset_hour_utc,
+            ),
+            "budget_usd_to_inr": cfg.get(
+                "budget_usd_to_inr",
+                settings.budget.usd_to_inr,
+            ),
+            # v1.5: auto-investigate (Zabbix → webhook). Hostgroups are
+            # serialised as a CSV string so the same input element works
+            # whether the value lives in YAML or in the DB.
+            "auto_investigate_enabled": cfg.get(
+                "auto_investigate_enabled",
+                bool(settings.auto_investigate
+                     and settings.auto_investigate.enabled),
+            ),
+            "auto_investigate_min_severity": cfg.get(
+                "auto_investigate_min_severity",
+                (settings.auto_investigate.min_severity
+                 if settings.auto_investigate else 4),
+            ),
+            "auto_investigate_allowed_hostgroups": cfg.get(
+                "auto_investigate_allowed_hostgroups",
+                (",".join(settings.auto_investigate.allowed_hostgroups)
+                 if settings.auto_investigate else ""),
+            ),
+            "auto_investigate_slack_channel": cfg.get(
+                "auto_investigate_slack_channel",
+                ((settings.auto_investigate.slack_channel or "")
+                 if settings.auto_investigate else ""),
+            ),
         },
     })
 
@@ -796,8 +837,26 @@ async def system_save(
     host_briefing_enabled: str = Form(""),
     host_briefing_days: int = Form(30),
     host_briefing_max_tokens: int = Form(2000),
+    budget_daily_inr_cap: float = Form(0.0),
+    budget_over_budget_action: str = Form("haiku_only"),
+    budget_reset_hour_utc: int = Form(0),
+    budget_usd_to_inr: float = Form(83.0),
+    auto_investigate_enabled: str = Form(""),
+    auto_investigate_min_severity: int = Form(4),
+    auto_investigate_allowed_hostgroups: str = Form(""),
+    auto_investigate_slack_channel: str = Form(""),
 ) -> RedirectResponse:
     memory = _memory(request)
+    # Reject unknown over_budget_action values — keeps the audit semantics
+    # well-defined.
+    action = budget_over_budget_action.strip()
+    if action not in {"haiku_only", "pause", "warn"}:
+        action = "haiku_only"
+    # Normalise the hostgroup CSV — trim, drop empties, keep insertion order.
+    hostgroups_csv = ",".join(
+        g.strip() for g in auto_investigate_allowed_hostgroups.split(",")
+        if g.strip()
+    )
     config = {
         "default_model": default_model.strip(),
         "summary_model": summary_model.strip(),
@@ -807,9 +866,90 @@ async def system_save(
         "host_briefing_enabled": host_briefing_enabled == "on",
         "host_briefing_days": max(1, min(365, host_briefing_days)),
         "host_briefing_max_tokens": max(500, min(10_000, host_briefing_max_tokens)),
+        "budget_daily_inr_cap": max(0.0, float(budget_daily_inr_cap)),
+        "budget_over_budget_action": action,
+        "budget_reset_hour_utc": max(0, min(23, int(budget_reset_hour_utc))),
+        "budget_usd_to_inr": max(1.0, float(budget_usd_to_inr)),
+        "auto_investigate_enabled": auto_investigate_enabled == "on",
+        "auto_investigate_min_severity": max(
+            0, min(5, int(auto_investigate_min_severity)),
+        ),
+        "auto_investigate_allowed_hostgroups": hostgroups_csv,
+        "auto_investigate_slack_channel": auto_investigate_slack_channel.strip(),
     }
     await cs.conn_upsert(
         memory, type_="system", name="defaults",
         config=config, updated_by=user["username"],
     )
     return RedirectResponse("/admin/connections/system", status_code=303)
+
+
+# ─── Auto-investigate: Zabbix action provisioning (v1.5) ─────────────────────
+
+@router.post("/admin/connections/system/register-zabbix-action")
+async def register_zabbix_action(
+    request: Request,
+    user: dict = Depends(login_required("admin")),
+    instance: str = Form(""),
+    webhook_url: str = Form(""),
+) -> JSONResponse:
+    """Provision the auto-investigate action on a Zabbix instance.
+
+    The admin form POSTs here from a button on the Models & limits page.
+    Returns JSON so the UI can render a flash without a full reload.
+    """
+    settings = request.app.state.settings
+    if settings.auto_investigate is None or not settings.auto_investigate.enabled:
+        return JSONResponse(
+            {"ok": False,
+             "message": "Enable auto-investigate first, then save the form."},
+            status_code=400,
+        )
+    secret = settings.auto_investigate.webhook_secret.get_secret_value()
+    if not secret:
+        return JSONResponse(
+            {"ok": False,
+             "message": (f"Env var "
+                          f"{settings.auto_investigate.webhook_secret_env} "
+                          f"is not set on the app host.")},
+            status_code=400,
+        )
+
+    # Resolve the Zabbix client for the requested instance.
+    instance = instance.strip() or (
+        settings.zabbix_instances[0].name if settings.zabbix_instances else ""
+    )
+    inst_cfg = next(
+        (i for i in settings.zabbix_instances if i.name == instance), None,
+    )
+    if inst_cfg is None:
+        return JSONResponse(
+            {"ok": False,
+             "message": f"Zabbix instance '{instance}' not configured."},
+            status_code=400,
+        )
+
+    # Lazy import — the action-setup helper imports from adapters and we
+    # want to keep the route file's import graph thin.
+    from zabbix_ai.clients.zabbix import ZabbixClient
+    from zabbix_ai.services.zabbix_action_setup import (
+        ensure_auto_investigate_action,
+    )
+
+    client = ZabbixClient(
+        inst_cfg.name, str(inst_cfg.url),
+        inst_cfg.token.get_secret_value(),
+    )
+    try:
+        result = await ensure_auto_investigate_action(
+            client, webhook_url=webhook_url.strip(),
+            secret=secret, instance=instance,
+        )
+    finally:
+        await client.aclose()
+    await log_admin_event(
+        _memory(request), event_type="zabbix_action_register",
+        by_user=user["username"], target=f"zabbix:{instance}:auto-investigate",
+        details={"status": result.get("status")},
+    )
+    return JSONResponse({"ok": result.get("status") != "error", **result})
