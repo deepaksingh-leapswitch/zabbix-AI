@@ -157,3 +157,100 @@ async def ensure_bootstrap_admin(memory: Memory, *, username: str,
         return None
     return await create_user(memory, username=username,
                               password=password, role="admin")
+
+
+# ── User management (v1.4) ──────────────────────────────────────────────────
+
+_VALID_ROLES = {"admin", "operator", "viewer"}
+
+
+async def list_users(memory: Memory) -> list[dict[str, Any]]:
+    """Return all users, ordered by id ascending."""
+    rows = await memory.fetchall(
+        """SELECT id, username, role, totp_enrolled, disabled,
+                  created_at, last_login_at
+           FROM users ORDER BY id ASC""",
+    )
+    return [
+        {
+            "id": r[0],
+            "username": r[1],
+            "role": r[2],
+            "totp_enrolled": bool(r[3]),
+            "disabled": bool(r[4]),
+            "created_at": r[5],
+            "last_login_at": r[6],
+        }
+        for r in rows
+    ]
+
+
+async def get_user_by_id(memory: Memory,
+                          user_id: int) -> dict[str, Any] | None:
+    row = await memory.fetchone(
+        """SELECT id, username, role, totp_enrolled, disabled,
+                  created_at, last_login_at
+           FROM users WHERE id=?""",
+        (user_id,),
+    )
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "username": row[1],
+        "role": row[2],
+        "totp_enrolled": bool(row[3]),
+        "disabled": bool(row[4]),
+        "created_at": row[5],
+        "last_login_at": row[6],
+    }
+
+
+async def set_password(memory: Memory, user_id: int,
+                        new_password: str) -> None:
+    await memory.execute(
+        "UPDATE users SET password_hash=? WHERE id=?",
+        (hash_password(new_password), user_id),
+    )
+
+
+async def set_role(memory: Memory, user_id: int, role: str) -> None:
+    if role not in _VALID_ROLES:
+        raise ValueError(
+            f"invalid role '{role}'; must be one of {sorted(_VALID_ROLES)}"
+        )
+    await memory.execute(
+        "UPDATE users SET role=? WHERE id=?", (role, user_id),
+    )
+
+
+async def set_disabled(memory: Memory, user_id: int,
+                        disabled: bool) -> None:
+    await memory.execute(
+        "UPDATE users SET disabled=? WHERE id=?",
+        (1 if disabled else 0, user_id),
+    )
+
+
+async def reset_totp(memory: Memory, user_id: int) -> str:
+    """Generate a fresh TOTP secret, clear enrollment + replay cache."""
+    new_secret = generate_totp_secret()
+    await memory.execute(
+        """UPDATE users SET totp_secret=?, totp_enrolled=0,
+                              last_totp_code=NULL, last_totp_at=NULL
+           WHERE id=?""",
+        (new_secret, user_id),
+    )
+    return new_secret
+
+
+async def delete_user(memory: Memory, user_id: int) -> None:
+    await memory.execute("DELETE FROM users WHERE id=?", (user_id,))
+
+
+async def count_admins(memory: Memory) -> int:
+    """Number of enabled admin accounts."""
+    row = await memory.fetchone(
+        "SELECT COUNT(*) FROM users WHERE role='admin' AND disabled=0"
+    )
+    return int(row[0]) if row else 0

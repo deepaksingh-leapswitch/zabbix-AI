@@ -40,6 +40,9 @@
     <a href="/admin/patterns"{% if active=='patterns' %} class="active"{% endif %}>Patterns</a>
     <a href="/admin/host-facts"{% if active=='host-facts' %} class="active"{% endif %}>Host facts</a>
     {% if user.role == 'admin' %}
+    <a href="/admin/cost"{% if active=='cost' %} class="active"{% endif %}>Cost</a>
+    <a href="/admin/status"{% if active=='status' %} class="active"{% endif %}>Status</a>
+    <a href="/admin/users"{% if active=='users' %} class="active"{% endif %}>Users</a>
     <a href="/admin/connections"{% if active=='connections' %} class="active"{% endif %}>Connections</a>
     {% endif %}
     <span class="right">

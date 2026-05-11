@@ -21,6 +21,7 @@ ALLOWED_DIAG_KEYS = {
     "diag.ss_listen", "diag.ps_aux", "diag.iostat",
     "diag.mysql_status", "diag.mysql_processlist", "diag.apache_status",
     "diag.snapshot", "diag.mail_queue",
+    "diag.network", "diag.cert_expiry", "diag.smart",
 }
 
 
@@ -154,6 +155,52 @@ def register_tools() -> None:
         "Postfix/Exim/mailq; Windows scans MailEnable. Envelope "
         "addresses only — no message bodies or subject lines.",
     )
+    _register_simple(
+        "diag.network",
+        "Network state: interfaces, routes, DNS config, DNS resolve test, "
+        "default gateway reachability. Use early when symptoms are "
+        "'site down' or 'API unreachable' before drilling into apps.",
+    )
+    _register_simple(
+        "diag.smart",
+        "SMART health and wear indicators for all physical disks. Use "
+        "proactively when investigating I/O errors, slow performance, or "
+        "before disk-intensive operations.",
+    )
+
+    @register(
+        "diag.cert_expiry",
+        description="TLS certificate expiry for one or more endpoints "
+                    "(host:port). Returns subject + NotBefore/NotAfter dates. "
+                    "Use when a service may be failing due to expired certs.",
+        schema={"type": "object",
+                "properties": {
+                    "hostid": {"type": "integer"},
+                    "instance": {"type": "string"},
+                    "endpoints": {
+                        "type": "string",
+                        "description": "comma-separated host:port "
+                                       "(e.g. 'mail.example.com:993,"
+                                       "panel.example.com:8443'); max 10",
+                    }},
+                "required": ["hostid", "instance", "endpoints"]},
+    )
+    async def _cert_expiry(*, hostid: int, instance: str, endpoints: str,
+                           _ctx: dict) -> str:
+        # Defense in depth — the Zabbix script also has a manualinput regex.
+        # Reject anything that isn't a strict comma-separated host:port list,
+        # bounded at 10 endpoints to fit within the 30s script timeout.
+        import re as _re
+        if not _re.fullmatch(
+            r"[A-Za-z0-9.\-]+:[0-9]{1,5}(,[A-Za-z0-9.\-]+:[0-9]{1,5}){0,9}",
+            endpoints,
+        ):
+            raise ValueError(
+                "endpoints must be comma-separated host:port (max 10)",
+            )
+        return await _run_diag(
+            _ctx, instance, hostid, "diag.cert_expiry", manualinput=endpoints,
+        )
 
     @register(
         "diag.systemctl_status",

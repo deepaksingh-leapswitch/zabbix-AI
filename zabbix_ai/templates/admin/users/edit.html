@@ -1,0 +1,118 @@
+{% extends "admin/base.html" %}
+{% block title %}Edit user — {{ target.username }}{% endblock %}
+{% block content %}
+<h1>Edit user — {{ target.username }}</h1>
+<p><a href="/admin/users">&larr; Users</a></p>
+
+<div class="card" style="max-width:640px;">
+  <h2 style="font-size:14px;margin:0 0 8px 0;color:#8a93a6;">Account</h2>
+  <table style="font-size:13px;">
+    <tr><th style="width:30%;">ID</th><td>{{ target.id }}</td></tr>
+    <tr><th>Username</th><td>{{ target.username }}</td></tr>
+    <tr><th>Role</th><td>{{ target.role }}</td></tr>
+    <tr><th>TOTP enrolled</th>
+        <td>{{ "yes" if target.totp_enrolled else "no" }}</td></tr>
+    <tr><th>Status</th>
+        <td>{{ "disabled" if target.disabled else "active" }}</td></tr>
+    <tr><th>Created</th>
+        <td style="font-size:12px;color:#8a93a6;">
+          {{ target.created_at[:19] if target.created_at else "" }}
+        </td></tr>
+    <tr><th>Last login</th>
+        <td style="font-size:12px;color:#8a93a6;">
+          {{ target.last_login_at[:19] if target.last_login_at else "—" }}
+        </td></tr>
+  </table>
+</div>
+
+{% if flash_new_totp_secret %}
+<div class="card" style="max-width:640px;border-color:#5a4a38;background:#2c2c1c;">
+  <h2 style="font-size:14px;margin:0 0 8px 0;color:#f7c96c;">
+    New TOTP secret — shown ONCE
+  </h2>
+  <p style="font-size:12px;color:#e6e8ee;margin:0 0 8px 0;">
+    Share this with <strong>{{ target.username }}</strong> over a secure
+    channel. They will enroll on next login. Navigating away will hide it
+    forever.
+  </p>
+  <p style="font-size:12px;color:#8a93a6;margin:0 0 4px 0;">Secret:</p>
+  <code style="display:block;padding:8px 10px;background:#0f1115;
+        border:1px solid #2a2f3a;border-radius:4px;font-size:13px;
+        word-break:break-all;">{{ flash_new_totp_secret }}</code>
+  <p style="font-size:12px;color:#8a93a6;margin:8px 0 4px 0;">
+    Provisioning URI:
+  </p>
+  <code style="display:block;padding:8px 10px;background:#0f1115;
+        border:1px solid #2a2f3a;border-radius:4px;font-size:12px;
+        word-break:break-all;">{{ flash_new_totp_uri }}</code>
+</div>
+{% endif %}
+
+<div class="card" style="max-width:640px;">
+  <h2 style="font-size:14px;margin:0 0 8px 0;color:#8a93a6;">Change role</h2>
+  <form method="post" action="/admin/users/{{ target.id }}/role">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div style="display:flex;gap:8px;align-items:center;">
+      <select name="role" style="padding:6px 10px;background:#0f1115;
+              color:#e6e8ee;border:1px solid #2a2f3a;border-radius:4px;">
+        {% for r in valid_roles %}
+        <option value="{{ r }}"{% if r == target.role %} selected{% endif %}>
+          {{ r }}
+        </option>
+        {% endfor %}
+      </select>
+      <button type="submit"{% if is_self %} disabled
+              title="cannot change your own role"{% endif %}>Save role</button>
+    </div>
+    {% if is_self %}
+    <p style="font-size:11px;color:#8a93a6;margin:6px 0 0 0;">
+      You cannot change your own role.
+    </p>
+    {% endif %}
+  </form>
+</div>
+
+<div class="card" style="max-width:640px;">
+  <h2 style="font-size:14px;margin:0 0 8px 0;color:#8a93a6;">Set password</h2>
+  <form method="post" action="/admin/users/{{ target.id }}/password">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div style="display:flex;gap:8px;align-items:center;">
+      <input name="new_password" type="password"
+             placeholder="New password" required
+             style="flex:1;">
+      <button type="submit">Set password</button>
+    </div>
+  </form>
+</div>
+
+<div class="card" style="max-width:640px;">
+  <h2 style="font-size:14px;margin:0 0 8px 0;color:#8a93a6;">
+    TOTP / lock / delete
+  </h2>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+    <form method="post" action="/admin/users/{{ target.id }}/reset-totp"
+          onsubmit="return confirm('Reset this user\'s TOTP secret? They will need to re-enroll.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" style="background:#1a3a5a;">Reset TOTP</button>
+    </form>
+    <form method="post" action="/admin/users/{{ target.id }}/lock"
+          onsubmit="return confirm('Toggle disabled state for this user?');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" style="background:#3a2a1a;"
+              {% if is_self %} disabled
+              title="cannot disable your own account"{% endif %}>
+        {{ "Unlock" if target.disabled else "Lock (disable)" }}
+      </button>
+    </form>
+    <form method="post" action="/admin/users/{{ target.id }}/delete"
+          onsubmit="return confirm('Delete this user? This cannot be undone.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" style="background:#3a1a1a;color:#f78b8b;"
+              {% if is_self %} disabled
+              title="cannot delete your own account"{% endif %}>
+        Delete user
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any
 
 import httpx
+
+from zabbix_ai.services.connection_health import record_health
 
 
 class ZabbixError(Exception):
@@ -11,7 +14,8 @@ class ZabbixError(Exception):
 
 
 class ZabbixClient:
-    def __init__(self, name: str, url: str, token: str, timeout: float = 60.0):
+    def __init__(self, name: str, url: str, token: str, timeout: float = 60.0,
+                 memory: Any = None):
         self.name = name
         self.url = url.rstrip("/") + "/api_jsonrpc.php"
         self.token = token
@@ -21,6 +25,9 @@ class ZabbixClient:
                      "Authorization": f"Bearer {token}"},
         )
         self._id = 0
+        # Optional memory handle for /admin/status health tracking.
+        # Defaults to None; callers (InvestigationRunner) pass it in.
+        self._memory = memory
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -29,15 +36,26 @@ class ZabbixClient:
         self._id += 1
         return self._id
 
+    async def _record(self, ok: bool, error: str = "") -> None:
+        with contextlib.suppress(Exception):
+            await record_health(self._memory, kind="zabbix",
+                                name=self.name, ok=ok, error=error)
+
     async def call(self, method: str, params: dict | list[Any] | None = None) -> Any:
         payload = {"jsonrpc": "2.0", "method": method,
                    "params": params or {}, "id": self._next_id()}
-        r = await self._client.post(self.url, json=payload)
-        r.raise_for_status()
-        data = r.json()
+        try:
+            r = await self._client.post(self.url, json=payload)
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            await self._record(False, str(e))
+            raise
         if "error" in data:
             err = data["error"]
+            await self._record(False, f"{err.get('message')}: {err.get('data')}")
             raise ZabbixError(f"{err.get('message')}: {err.get('data')}")
+        await self._record(True)
         return data["result"]
 
     async def get_problem(self, eventid: int) -> dict:

@@ -1,0 +1,167 @@
+{% extends "admin/base.html" %}
+{% block title %}Cost — Zabbix RCA AI{% endblock %}
+{% block content %}
+<h1>Cost dashboard
+  <span style="font-size:13px; font-weight:400;">
+    · <a href="/admin/cost/export.csv">Download CSV</a>
+  </span>
+</h1>
+
+<div class="card">
+  <div class="stat">
+    <div class="v">&#8377;{{ '%.2f' % today_total_inr }}</div>
+    <div class="l">Today</div>
+  </div>
+  <div class="stat">
+    <div class="v">&#8377;{{ '%.2f' % month_total_inr }}</div>
+    <div class="l">This month</div>
+  </div>
+  <div class="stat">
+    <div class="v">{{ today_count }}</div>
+    <div class="l">Investigations today</div>
+  </div>
+  <div class="stat">
+    <div class="v">&#8377;{{ '%.2f' % avg_today_inr }}</div>
+    <div class="l">Avg &#8377;/investigation today</div>
+  </div>
+</div>
+
+<p style="color:#8a93a6; font-size:12px; margin: 4px 2px 16px 2px;">
+  Pricing:
+  {% for p in pricing_summary %}
+    {{ p.model }} ${{ '%.2f' % p.input }}/${{ '%.2f' % p.output }} per Mtok{% if not loop.last %},{% endif %}
+  {% endfor %}
+  — converted at $1 = &#8377;{{ '%.2f' % fx_rate }}.
+</p>
+
+<div class="card">
+  <h1>30-day daily spend</h1>
+  {% if daily %}
+  <div style="display:flex; flex-direction:column; gap:4px;">
+    {% for d in daily %}
+    <div style="display:flex; align-items:center; gap:8px; font-size:12px;">
+      <div style="width: 90px; color:#8a93a6; white-space:nowrap;">{{ d.date }}</div>
+      <div style="flex:1; background:#0f1115; border:1px solid #2a2f3a;
+                   border-radius:3px; height:18px; position:relative;">
+        <div style="height:100%; width: {{ d.pct }}%; background:#4f8cf7;
+                     border-radius:3px;"></div>
+      </div>
+      <div style="width: 120px; text-align:right; color:#cdd3e0;">
+        &#8377;{{ '%.2f' % d.inr }}
+        <span style="color:#8a93a6;">({{ d.count }})</span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p style="color:#8a93a6; font-size:13px;">No spend in the last 30 days.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h1>Model split (this month)</h1>
+  {% if model_split %}
+  <div style="display:flex; flex-direction:column; gap:6px;">
+    {% for m in model_split %}
+    <div style="display:flex; align-items:center; gap:8px; font-size:12px;">
+      <div style="width: 220px; color:#cdd3e0; white-space:nowrap;
+                   overflow:hidden; text-overflow:ellipsis;">{{ m.model }}</div>
+      <div style="flex:1; background:#0f1115; border:1px solid #2a2f3a;
+                   border-radius:3px; height:18px;">
+        <div style="height:100%; width: {{ m.pct }}%;
+                     background:#6dd58c; border-radius:3px;"></div>
+      </div>
+      <div style="width: 180px; text-align:right; color:#cdd3e0;">
+        &#8377;{{ '%.2f' % m.inr }}
+        <span style="color:#8a93a6;">({{ m.pct }}% · {{ m.count }} inv)</span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p style="color:#8a93a6; font-size:13px;">No investigations this month.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h1>Top 10 most expensive investigations</h1>
+  {% if top_investigations %}
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th><th>Started</th><th>Host</th><th>Model</th>
+        <th>Tokens in</th><th>Tokens out</th><th>Cost</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for inv in top_investigations %}
+      <tr>
+        <td><a href="/admin/investigations/{{ inv.id }}">{{ inv.id }}</a></td>
+        <td style="white-space:nowrap; font-size:11px;">
+          {{ inv.started_at[:19] if inv.started_at else '' }}
+        </td>
+        <td>{{ inv.hostname }}</td>
+        <td style="font-size:11px;">{{ inv.model }}</td>
+        <td>{{ inv.tokens_in }}</td>
+        <td>{{ inv.tokens_out }}</td>
+        <td>&#8377;{{ '%.4f' % inv.inr }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p style="color:#8a93a6; font-size:13px;">No investigations yet.</p>
+  {% endif %}
+</div>
+
+<div style="display:flex; gap:16px; flex-wrap:wrap;">
+  <div class="card" style="flex:1; min-width:300px;">
+    <h1>Top 10 hosts by cost</h1>
+    {% if top_hosts %}
+    <table>
+      <thead>
+        <tr><th>Host</th><th>Inv.</th><th>Tokens</th><th>Cost</th></tr>
+      </thead>
+      <tbody>
+      {% for h in top_hosts %}
+        <tr>
+          <td>
+            <a href="/admin/host-facts?hostid={{ h.hostid }}">{{ h.hostname }}</a>
+            <span style="color:#8a93a6; font-size:11px;">({{ h.hostid }})</span>
+          </td>
+          <td>{{ h.count }}</td>
+          <td>{{ h.tokens }}</td>
+          <td>&#8377;{{ '%.2f' % h.inr }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color:#8a93a6; font-size:13px;">No host data yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="card" style="flex:1; min-width:300px;">
+    <h1>Top 10 sources by cost</h1>
+    {% if top_sources %}
+    <table>
+      <thead>
+        <tr><th>Source</th><th>Inv.</th><th>Tokens</th><th>Cost</th></tr>
+      </thead>
+      <tbody>
+      {% for s in top_sources %}
+        <tr>
+          <td>{{ s.source }}</td>
+          <td>{{ s.count }}</td>
+          <td>{{ s.tokens }}</td>
+          <td>&#8377;{{ '%.2f' % s.inr }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color:#8a93a6; font-size:13px;">No source data yet.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

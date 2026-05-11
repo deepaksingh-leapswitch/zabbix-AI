@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -16,6 +17,7 @@ from zabbix_ai.clients.slack import SlackClient
 from zabbix_ai.config import Settings
 from zabbix_ai.orchestrator import InvestigationContext
 from zabbix_ai.renderers.slack import render_blocks, render_placeholder
+from zabbix_ai.services.connection_health import record_health
 from zabbix_ai.services.investigation_runner import InvestigationRunner
 
 
@@ -156,11 +158,20 @@ def build_router(settings: Settings) -> APIRouter:
         if allowed_channels and channel not in allowed_channels:
             return JSONResponse({"ok": True})
 
-        await _handle_mention(
-            event=event, channel=channel, settings=settings,
-            bot_token=bot_token, default_instance=default_instance,
-            known_instances=known_instances,
-        )
+        memory = getattr(request.app.state, "memory", None)
+        try:
+            await _handle_mention(
+                event=event, channel=channel, settings=settings,
+                bot_token=bot_token, default_instance=default_instance,
+                known_instances=known_instances,
+            )
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                await record_health(memory, kind="slack", name="primary",
+                                    ok=False, error=str(e))
+            raise
+        with contextlib.suppress(Exception):
+            await record_health(memory, kind="slack", name="primary", ok=True)
         return JSONResponse({"ok": True})
 
     return router

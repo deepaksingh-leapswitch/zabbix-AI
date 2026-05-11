@@ -2,6 +2,54 @@
 
 All notable releases. Format follows [keepachangelog.com](https://keepachangelog.com/).
 
+## v1.4.0 — 2026-05-11
+
+**Admin tooling + 3 new diag tools.**
+
+### Admin panel — three new pages
+
+- **`/admin/users`** — user management (admin role only): create, change role,
+  set password, reset TOTP, lock/unlock, delete. Server-side safety gates
+  prevent self-lockout and last-admin demotion. Every change writes to
+  `admin_audit_log`.
+- **`/admin/cost`** — Anthropic spend dashboard. Today/month totals in ₹,
+  30-day daily bar chart, model split (Sonnet vs Haiku), top-10 most
+  expensive investigations / hosts / sources. Pricing in
+  `services/pricing.py`; CSV export at `/admin/cost/export.csv`.
+- **`/admin/status`** — system health page. App version + uptime, DB stats,
+  per-Zabbix-instance health, Slack/Anthropic last-success timestamps,
+  secret counts, running investigation count, memory-table row counts,
+  background-task liveness. JSON variant at `/admin/status.json`.
+
+### Diagnostic tools
+
+- **`diag.network`** — interfaces, routes, DNS config + resolve test,
+  default-gateway reachability. Linux + Windows.
+- **`diag.cert_expiry`** — TLS cert dates for one or more `host:port`
+  endpoints (comma-separated, max 10). Strict server-side regex validator.
+  Linux uses `openssl s_client`; Windows uses `Net.Sockets.TcpClient` +
+  `SslStream`.
+- **`diag.smart`** — SMART health for all physical disks. Linux requires
+  `smartmontools` + a sudoers NOPASSWD entry for `smartctl`; Windows uses
+  `Get-PhysicalDisk` and `Get-StorageReliabilityCounter`.
+
+### Infrastructure
+
+- **`migrations/006_connection_health.sql`** — `connection_health(kind,
+  name, last_success_at, last_error_at, last_error)` table. Updated by
+  Zabbix / Anthropic / Slack clients via `services/connection_health.py`
+  (UPSERT, best-effort, never breaks the calling API call).
+- **`docs/AGENT-SETUP.md`** — full agent-side install + hardening guide:
+  AllowKey patterns (Linux literal-body + wildcards for manualinput diags,
+  Windows wrapper-script pattern), TLS PSK, smartmontools sudoers, troubleshooting.
+
+### Tests
+
+- 280+ tests, 0 failures, 0 lint errors.
+- New: `test_admin_users_mgmt` (12), `test_admin_cost` (6),
+  `test_admin_status` (6), `test_connection_health` (7),
+  `test_pricing` (8), `test_tools_diag` +9, `test_script_bootstrap` +5.
+
 ## v1.3.1 — 2026-05-10
 
 **Security hardening release.** Addresses all 21 findings from the

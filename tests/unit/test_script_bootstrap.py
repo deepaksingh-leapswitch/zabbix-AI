@@ -140,3 +140,77 @@ async def test_snapshot_definition_present():
     # encoded wrapper is present.
     assert "powershell" in snap.windows
     assert "EncodedCommand" in snap.windows
+
+
+# ---------------- v1.4 tools: network / cert_expiry / smart ----------------
+
+def _diag(name: str) -> DiagDef | None:
+    return next((d for d in DIAG_DEFINITIONS if d.name == name), None)
+
+
+def test_v14_diag_network_defined_for_both_os():
+    d = _diag("diag.network")
+    assert d is not None
+    assert d.linux is not None and d.windows is not None
+    assert "ip route" in d.linux
+    # Windows variant must be base64-encoded PowerShell.
+    assert "powershell" in d.windows
+    assert "EncodedCommand" in d.windows
+
+
+def test_v14_diag_smart_defined_for_both_os():
+    d = _diag("diag.smart")
+    assert d is not None
+    assert d.linux is not None and d.windows is not None
+    assert "smartctl" in d.linux
+    assert "powershell" in d.windows
+    assert "EncodedCommand" in d.windows
+
+
+def test_v14_diag_cert_expiry_defined_with_manualinput():
+    d = _diag("diag.cert_expiry")
+    assert d is not None
+    assert d.linux is not None and d.windows is not None
+    assert d.manualinput is True
+    assert d.manualinput_arg_name == "endpoints"
+    # Validator regex must enforce comma-separated host:port (max 10).
+    assert d.manualinput_validator
+    import re as _re
+    pat = _re.compile(d.manualinput_validator)
+    assert pat.fullmatch("mail.example.com:993")
+    assert pat.fullmatch("a:1,b:2,c:3")
+    assert not pat.fullmatch("mail.example.com:993;rm")
+    assert not pat.fullmatch("nohost")
+    eleven = ",".join(f"h{i}:1" for i in range(11))
+    assert not pat.fullmatch(eleven)
+    # MANUALINPUT placeholder must appear in both bodies for Zabbix to
+    # substitute the user-supplied value at execution time.
+    assert "{MANUALINPUT}" in d.linux
+    assert "{MANUALINPUT}" in d.windows
+
+
+async def test_v14_tools_create_scripts_for_both_os():
+    """The three new tools each register one Linux + one Windows script."""
+    n = _expected_script_count()
+    client = _make_client(existing=[], next_ids=[str(900 + i) for i in range(n)])
+    index = await ensure_diag_scripts(client)
+    for name in ("diag.network", "diag.cert_expiry", "diag.smart"):
+        assert index.scriptid(name, "linux") is not None
+        assert index.scriptid(name, "windows") is not None
+
+
+async def test_v14_cert_expiry_create_includes_manualinput_validator():
+    """cert_expiry's bootstrap params must include the validator regex."""
+    d = _diag("diag.cert_expiry")
+    assert d is not None
+    client = _make_client(existing=[], next_ids=["1001", "1002"])
+    await ensure_diag_scripts(client, defs=[d])
+    create_calls = [c for c in client.call.await_args_list
+                    if c.args[0] == "script.create"]
+    # one Linux + one Windows
+    assert len(create_calls) == 2
+    for c in create_calls:
+        params = c.args[1]
+        assert params["manualinput"] == "1"
+        assert "host:port" in params["manualinput_prompt"]
+        assert params["manualinput_validator"] == d.manualinput_validator

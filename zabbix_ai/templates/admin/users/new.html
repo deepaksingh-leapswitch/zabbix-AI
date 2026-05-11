@@ -1,0 +1,50 @@
+{% extends "admin/base.html" %}
+{% block title %}New user — Admin{% endblock %}
+{% block content %}
+<h1>New user</h1>
+<p><a href="/admin/users">&larr; Users</a></p>
+<div class="card" style="max-width:520px;">
+  <form method="post" action="/admin/users/create">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          Username
+        </label>
+        <input name="username" type="text" style="width:100%;box-sizing:border-box;"
+               value="{{ form.username if form else '' }}"
+               placeholder="e.g. alice" required>
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          Password
+        </label>
+        <input name="password" type="password" style="width:100%;box-sizing:border-box;"
+               placeholder="Initial password" required>
+        <p style="font-size:11px;color:#8a93a6;margin:4px 0 0 0;">
+          The user will be prompted to enroll TOTP on first login.
+        </p>
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8a93a6;display:block;margin-bottom:4px;">
+          Role
+        </label>
+        <select name="role" style="width:100%;box-sizing:border-box;padding:6px 10px;
+                background:#0f1115;color:#e6e8ee;border:1px solid #2a2f3a;border-radius:4px;">
+          {% for r in valid_roles %}
+          <option value="{{ r }}"
+                  {% if form and form.role == r %}selected
+                  {% elif not form and r == 'viewer' %}selected{% endif %}>
+            {{ r }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button type="submit">Create user</button>
+        <a href="/admin/users" style="font-size:13px;">Cancel</a>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}

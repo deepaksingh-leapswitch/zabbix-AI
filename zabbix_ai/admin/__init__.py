@@ -17,11 +17,16 @@ from zabbix_ai.admin.routes import (
     audit_routes,
     auth_routes,
     connections,
+    cost,
     dashboard,
     investigations,
     memory_routes,
     oauth_google,
+    status,
     zabbix_link,
+)
+from zabbix_ai.admin.routes import (
+    users as users_routes,
 )
 from zabbix_ai.admin.security_headers import SecurityHeadersMiddleware
 from zabbix_ai.config import Settings
@@ -95,6 +100,9 @@ def register_admin_components(app: FastAPI, settings: Settings) -> None:
     app.include_router(audit_routes.router)
     app.include_router(memory_routes.router)
     app.include_router(connections.router)
+    app.include_router(users_routes.router)
+    app.include_router(cost.router)
+    app.include_router(status.router)
     if settings.zabbix_ui is not None:
         app.include_router(zabbix_link.router)
     if settings.oauth_google is not None:

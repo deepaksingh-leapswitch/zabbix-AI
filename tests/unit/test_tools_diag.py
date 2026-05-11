@@ -204,3 +204,108 @@ def test_allowlist_complete():
     assert "diag.snapshot" in ALLOWED_DIAG_KEYS
     assert "diag.mysql_processlist" in ALLOWED_DIAG_KEYS
     assert "system.run" not in ALLOWED_DIAG_KEYS
+
+
+# ---------------- v1.4 tools: network / cert_expiry / smart ----------------
+
+def test_v14_tools_in_allowlist():
+    assert "diag.network" in ALLOWED_DIAG_KEYS
+    assert "diag.cert_expiry" in ALLOWED_DIAG_KEYS
+    assert "diag.smart" in ALLOWED_DIAG_KEYS
+
+
+def test_v14_tools_registered():
+    from zabbix_ai.tools import ALLOWED_TOOLS
+    register_tools()
+    assert "diag.network" in ALLOWED_TOOLS
+    assert "diag.cert_expiry" in ALLOWED_TOOLS
+    assert "diag.smart" in ALLOWED_TOOLS
+
+
+async def test_diag_network_dispatches(context, fake_client):
+    register_tools()
+    await dispatch("diag.network", {"hostid": 7, "instance": "monitoring"},
+                   context=context)
+    _method, params = fake_client.call.await_args.args
+    assert "network" in params["scriptid"]
+
+
+async def test_diag_smart_dispatches(context, fake_client):
+    register_tools()
+    await dispatch("diag.smart", {"hostid": 7, "instance": "monitoring"},
+                   context=context)
+    _method, params = fake_client.call.await_args.args
+    assert "smart" in params["scriptid"]
+
+
+async def test_diag_cert_expiry_passes_manualinput(context, fake_client):
+    register_tools()
+    await dispatch(
+        "diag.cert_expiry",
+        {"hostid": 7, "instance": "monitoring",
+         "endpoints": "mail.example.com:993,panel.example.com:8443"},
+        context=context,
+    )
+    _method, params = fake_client.call.await_args.args
+    assert params["manualinput"] == \
+        "mail.example.com:993,panel.example.com:8443"
+
+
+async def test_diag_cert_expiry_rejects_bad_endpoint(context):
+    register_tools()
+    # shell metachars, missing port, bad chars — all rejected
+    bad_inputs = [
+        "mail.example.com",          # no port
+        "mail.example.com:abc",      # non-numeric port
+        "mail.example.com:993;rm -rf /",  # shell metachar
+        "mail.example.com 993",      # space
+        "mail.example.com:993,",     # trailing comma
+        "",                          # empty
+        "host:99999999",             # port too long
+    ]
+    for bad in bad_inputs:
+        with pytest.raises(ValueError, match="endpoints must be"):
+            await dispatch(
+                "diag.cert_expiry",
+                {"hostid": 7, "instance": "monitoring", "endpoints": bad},
+                context=context,
+            )
+
+
+async def test_diag_cert_expiry_accepts_valid_endpoints(context, fake_client):
+    register_tools()
+    for ok in [
+        "host:443",
+        "mail.example.com:993",
+        "a.b-c.example.com:8443,x.example.com:443",
+    ]:
+        await dispatch(
+            "diag.cert_expiry",
+            {"hostid": 7, "instance": "monitoring", "endpoints": ok},
+            context=context,
+        )
+
+
+async def test_diag_cert_expiry_rejects_more_than_10_endpoints(context):
+    register_tools()
+    eleven = ",".join(f"host{i}.example.com:443" for i in range(11))
+    with pytest.raises(ValueError, match="endpoints must be"):
+        await dispatch(
+            "diag.cert_expiry",
+            {"hostid": 7, "instance": "monitoring", "endpoints": eleven},
+            context=context,
+        )
+
+
+async def test_diag_cert_expiry_accepts_exactly_10_endpoints(
+        context, fake_client,
+):
+    register_tools()
+    ten = ",".join(f"host{i}.example.com:443" for i in range(10))
+    await dispatch(
+        "diag.cert_expiry",
+        {"hostid": 7, "instance": "monitoring", "endpoints": ten},
+        context=context,
+    )
+    _method, params = fake_client.call.await_args.args
+    assert params["manualinput"] == ten

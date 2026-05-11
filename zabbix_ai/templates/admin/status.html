@@ -1,0 +1,188 @@
+{% extends "admin/base.html" %}
+{% block title %}System status — Zabbix RCA AI{% endblock %}
+{% block content %}
+
+{% macro state_pill(state) -%}
+  {%- if state == 'ok' -%}
+    <span style="font-size:11px;padding:2px 8px;border-radius:12px;
+                 background:#1c2c1f;color:#6dd58c;border:1px solid #385a3d;">OK</span>
+  {%- elif state == 'error' -%}
+    <span style="font-size:11px;padding:2px 8px;border-radius:12px;
+                 background:#2c1c1c;color:#f78b8b;border:1px solid #5a3838;">ERROR</span>
+  {%- else -%}
+    <span style="font-size:11px;padding:2px 8px;border-radius:12px;
+                 background:#1a1d24;color:#8a93a6;border:1px solid #2a2f3a;">UNKNOWN</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro fmt_bytes(n) -%}
+  {%- if n is none -%}—
+  {%- elif n < 1024 -%}{{ n }} B
+  {%- elif n < 1048576 -%}{{ "%.1f"|format(n / 1024) }} KiB
+  {%- elif n < 1073741824 -%}{{ "%.1f"|format(n / 1048576) }} MiB
+  {%- else -%}{{ "%.2f"|format(n / 1073741824) }} GiB
+  {%- endif -%}
+{%- endmacro %}
+
+<h1>System status</h1>
+<p style="color:#8a93a6;font-size:13px;margin:0 0 18px 0;">
+  Live snapshot generated at <code>{{ data.generated_at }}</code>.
+  Machine-readable copy at <a href="/admin/status.json">/admin/status.json</a>.
+</p>
+
+<div class="card">
+  <h1>Application</h1>
+  <table>
+    <tbody>
+      <tr><th>Version</th><td>{{ data.app.version }}</td></tr>
+      <tr><th>Process started</th>
+          <td>{{ data.app.process_start_at }}
+              <span style="color:#8a93a6;">({{ data.app.uptime_pretty }})</span></td></tr>
+      <tr><th>Uptime</th><td>{{ data.app.uptime_seconds }} s</td></tr>
+      <tr><th>Python</th><td>{{ data.app.python_version }}</td></tr>
+      <tr><th>Platform</th><td>{{ data.app.platform }}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h1>Database</h1>
+  <table>
+    <tbody>
+      <tr><th>Path</th><td><code>{{ data.database.path }}</code></td></tr>
+      <tr><th>Size</th><td>{{ fmt_bytes(data.database.size_bytes) }}</td></tr>
+      <tr><th>Schema version</th>
+          <td>{{ data.database.schema_version if data.database.schema_version is not none else '—' }}</td></tr>
+      <tr><th>Last admin audit</th>
+          <td>
+            {% if data.database.last_admin_audit_at %}
+              {{ data.database.last_admin_audit_at }}
+              <span style="color:#8a93a6;">({{ data.database.last_admin_audit_ago }})</span>
+            {% else %}—{% endif %}
+          </td></tr>
+      <tr><th>Secrets stored</th><td>{{ data.secrets_count }}</td></tr>
+      <tr><th>Connections stored</th><td>{{ data.connections_count }}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h1>Zabbix instances</h1>
+  {% if data.zabbix %}
+  <table>
+    <thead><tr><th>Name</th><th>State</th><th>Last success</th><th>Last error</th></tr></thead>
+    <tbody>
+      {% for h in data.zabbix %}
+      <tr>
+        <td><strong>{{ h.name }}</strong></td>
+        <td>{{ state_pill(h.state) }}</td>
+        <td>
+          {% if h.last_success_at %}{{ h.last_success_ago }}
+          <div style="color:#8a93a6;font-size:11px;">{{ h.last_success_at }}</div>
+          {% else %}<span style="color:#8a93a6;">never</span>{% endif %}
+        </td>
+        <td>
+          {% if h.last_error_at %}{{ h.last_error_ago }}
+          <div style="color:#f78b8b;font-size:11px;">{{ h.last_error }}</div>
+          {% else %}<span style="color:#8a93a6;">—</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p style="color:#8a93a6;font-size:13px;">No Zabbix instances configured.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h1>External services</h1>
+  <table>
+    <thead><tr><th>Service</th><th>State</th><th>Last success</th><th>Last error</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Anthropic</strong> (primary)</td>
+        <td>{{ state_pill(data.anthropic.state) }}</td>
+        <td>
+          {% if data.anthropic.last_success_at %}{{ data.anthropic.last_success_ago }}
+          <div style="color:#8a93a6;font-size:11px;">{{ data.anthropic.last_success_at }}</div>
+          {% else %}<span style="color:#8a93a6;">never</span>{% endif %}
+        </td>
+        <td>
+          {% if data.anthropic.last_error_at %}{{ data.anthropic.last_error_ago }}
+          <div style="color:#f78b8b;font-size:11px;">{{ data.anthropic.last_error }}</div>
+          {% else %}<span style="color:#8a93a6;">—</span>{% endif %}
+        </td>
+      </tr>
+      {% if data.slack %}
+      <tr>
+        <td><strong>Slack</strong> (primary)</td>
+        <td>{{ state_pill(data.slack.state) }}</td>
+        <td>
+          {% if data.slack.last_success_at %}{{ data.slack.last_success_ago }}
+          <div style="color:#8a93a6;font-size:11px;">{{ data.slack.last_success_at }}</div>
+          {% else %}<span style="color:#8a93a6;">never</span>{% endif %}
+        </td>
+        <td>
+          {% if data.slack.last_error_at %}{{ data.slack.last_error_ago }}
+          <div style="color:#f78b8b;font-size:11px;">{{ data.slack.last_error }}</div>
+          {% else %}<span style="color:#8a93a6;">—</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td><strong>Slack</strong></td>
+        <td><span style="color:#8a93a6;">not configured</span></td>
+        <td>—</td><td>—</td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h1>Investigations</h1>
+  <div class="stat">
+    <div class="v">{{ data.investigations.total }}</div>
+    <div class="l">Total</div>
+  </div>
+  <div class="stat">
+    <div class="v">{{ data.investigations.running }}</div>
+    <div class="l">Running</div>
+  </div>
+</div>
+
+<div class="card">
+  <h1>Memory tables</h1>
+  <table>
+    <thead><tr><th>Table</th><th>Rows</th></tr></thead>
+    <tbody>
+      {% for tbl, n in data.tables.items() %}
+      <tr>
+        <td><code>{{ tbl }}</code></td>
+        <td>{{ '—' if n is none else n }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if data.background_tasks %}
+<div class="card">
+  <h1>Background tasks</h1>
+  <table>
+    <thead><tr><th>Task</th><th>Done</th><th>Cancelled</th></tr></thead>
+    <tbody>
+      {% for name, t in data.background_tasks.items() %}
+      <tr>
+        <td><code>{{ name }}</code></td>
+        <td>{{ 'yes' if t.done else 'no' }}</td>
+        <td>{{ 'yes' if t.cancelled else 'no' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% endblock %}

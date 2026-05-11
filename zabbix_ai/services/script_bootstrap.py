@@ -163,6 +163,112 @@ _WINDOWS_MAIL_QUEUE_PS = (
     "}"
 )
 
+# Linux network state — interfaces, routes, DNS config + resolve test, default
+# gateway reachability. Used as an early triage step when symptoms look like
+# "site down" / "API unreachable" before drilling into apps.
+_LINUX_NETWORK = """\
+echo '=== ip a (brief) ==='; ip -brief a 2>/dev/null
+echo '=== ip route ==='; ip route 2>/dev/null
+echo '=== resolv.conf ==='; cat /etc/resolv.conf 2>/dev/null
+echo '=== DNS resolve test ==='
+for d in $(awk '/^nameserver/ {print $2}' /etc/resolv.conf 2>/dev/null); do
+  echo "[$d]"; timeout 2 nslookup google.com $d 2>&1 | tail -3
+done
+echo '=== default gw reachability ==='
+gw=$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}')
+[ -n "$gw" ] && timeout 3 ping -c 2 -W 1 $gw 2>&1 | tail -2
+"""
+
+# Windows network state PowerShell — encoded once at bootstrap. Built up as
+# concatenated chunks to stay within the project's 100-char line limit.
+_WINDOWS_NETWORK_PS = (
+    "Get-NetIPAddress -AddressFamily IPv4 | "
+    "Select-Object InterfaceAlias,IPAddress,PrefixLength | "
+    "Format-Table | Out-String;"
+    "Get-NetRoute -DestinationPrefix 0.0.0.0/0 | "
+    "Select-Object NextHop,InterfaceAlias,RouteMetric | "
+    "Format-Table | Out-String;"
+    "Get-DnsClientServerAddress -AddressFamily IPv4 | "
+    "Where-Object {$_.ServerAddresses} | "
+    "Format-Table InterfaceAlias,ServerAddresses | Out-String;"
+    "try { Resolve-DnsName google.com -QuickTimeout -ErrorAction Stop | "
+    "Select-Object -First 3 | Format-Table | Out-String } "
+    "catch { \"DNS resolve failed: $_\" };"
+    "$gw=(Get-NetRoute -DestinationPrefix 0.0.0.0/0 | "
+    "Select-Object -First 1).NextHop;"
+    "if ($gw) { \"ping $gw: \" + (Test-Connection $gw -Count 2 -Quiet) }"
+)
+
+# Linux TLS cert-expiry probe. Iterates the operator-supplied host:port list
+# (`{MANUALINPUT}` — Zabbix substitutes literally; the tool wrapper validates).
+_LINUX_CERT_EXPIRY = (
+    "IFS=',' read -ra eps <<< \"{MANUALINPUT}\"\n"
+    "for ep in \"${eps[@]}\"; do\n"
+    "  echo \"=== $ep ===\"\n"
+    "  timeout 5 bash -c \"echo | openssl s_client -servername ${ep%:*} "
+    "-connect $ep 2>/dev/null | openssl x509 -noout -dates -subject 2>&1\""
+    " || echo \"  (failed or timed out)\"\n"
+    "done"
+)
+
+# Windows TLS cert-expiry — manualinput-using diags can't be `_ps_encoded`
+# because Zabbix substitutes `{MANUALINPUT}` on the literal command string
+# (encoding happens once at bootstrap time, before substitution). Keep the
+# script inline; the tool-side regex constrains input characters tightly.
+_WINDOWS_CERT_EXPIRY = (
+    "powershell -NoProfile -Command "
+    "\"$ProgressPreference='SilentlyContinue';"
+    "$ErrorActionPreference='SilentlyContinue';"
+    "$eps='{MANUALINPUT}' -split ',';"
+    "foreach ($ep in $eps) {"
+    "$h,$p=$ep -split ':';"
+    "\\\"=== $ep ===\\\";"
+    "try {"
+    "$tcp=New-Object Net.Sockets.TcpClient;"
+    "$tcp.Connect($h,[int]$p);"
+    "$ssl=New-Object Net.Security.SslStream($tcp.GetStream(),$false,({$true}));"
+    "$ssl.AuthenticateAsClient($h);"
+    "$cert=$ssl.RemoteCertificate;"
+    "$cert2=[Security.Cryptography.X509Certificates.X509Certificate2]::new($cert);"
+    "'Subject : ' + $cert2.Subject;"
+    "'Issuer  : ' + $cert2.Issuer;"
+    "'NotBefore: ' + $cert2.NotBefore;"
+    "'NotAfter : ' + $cert2.NotAfter;"
+    "$ssl.Dispose(); $tcp.Dispose();"
+    "} catch { '  error: ' + $_ }"
+    "}\""
+)
+
+# Linux SMART health probe. Gracefully no-ops when smartmontools isn't
+# installed (printing an install hint) rather than failing the whole call.
+_LINUX_SMART = (
+    "if ! command -v smartctl >/dev/null 2>&1; then\n"
+    "  echo 'smartmontools not installed — run: apt install smartmontools "
+    "(or yum install smartmontools)'; exit 0\n"
+    "fi\n"
+    "smartctl --scan 2>/dev/null | awk '{print $1}' | while read -r d; do\n"
+    "  echo \"=== $d ===\"\n"
+    "  sudo -n smartctl -H -i -A \"$d\" 2>&1 | "
+    "grep -E 'Device Model|Model Number|User Capacity|Power_On_Hours|"
+    "Reallocated_Sector|Current_Pending|SMART overall|test result' || true\n"
+    "done"
+)
+
+# Windows SMART/storage-health PowerShell — uses Get-PhysicalDisk +
+# Get-StorageReliabilityCounter (NVMe/SATA both supported).
+_WINDOWS_SMART_PS = (
+    "Get-PhysicalDisk | "
+    "Select-Object FriendlyName,HealthStatus,OperationalStatus,MediaType,"
+    "@{N='Size_GB';E={[math]::Round($_.Size/1GB,1)}},SerialNumber | "
+    "Format-Table | Out-String;"
+    "Get-PhysicalDisk | ForEach-Object {"
+    "\"=== $($_.FriendlyName) ===\";"
+    "$_ | Get-StorageReliabilityCounter 2>$null | "
+    "Format-List PowerOnHours,Wear,ReadErrorsTotal,WriteErrorsTotal,"
+    "Temperature | Out-String"
+    "}"
+)
+
 # Linux multi-command snapshot — runs through /bin/sh on the agent.
 _LINUX_SNAPSHOT = (
     "echo '=== uptime ==='; uptime; "
@@ -352,6 +458,29 @@ DIAG_DEFINITIONS: list[DiagDef] = [
             manualinput_validator=r"^[1-9][0-9]{0,3}$",
             manualinput_default_value="200",
             manualinput_arg_name="lines"),
+    DiagDef("diag.network",
+            "Network state: interfaces, routes, DNS config, DNS resolve test, "
+            "default gateway reachability. Use early when symptoms are "
+            "'site down' or 'API unreachable' before drilling into apps.",
+            linux=_LINUX_NETWORK,
+            windows=_ps_encoded(_WINDOWS_NETWORK_PS)),
+    DiagDef("diag.cert_expiry",
+            "TLS certificate expiry for one or more endpoints (host:port). "
+            "Returns subject + NotBefore/NotAfter dates. Use when a service "
+            "may be failing due to expired certs.",
+            linux=_LINUX_CERT_EXPIRY,
+            windows=_WINDOWS_CERT_EXPIRY,
+            manualinput=True,
+            manualinput_prompt="comma-separated host:port (max 10)",
+            manualinput_validator=
+                r"^[A-Za-z0-9.\-]+:[0-9]{1,5}(,[A-Za-z0-9.\-]+:[0-9]{1,5}){0,9}$",
+            manualinput_arg_name="endpoints"),
+    DiagDef("diag.smart",
+            "SMART health and wear indicators for all physical disks. Use "
+            "proactively when investigating I/O errors, slow performance, or "
+            "before disk-intensive operations.",
+            linux=_LINUX_SMART,
+            windows=_ps_encoded(_WINDOWS_SMART_PS)),
     # Consolidated first-look snapshot. Bundles uptime, df, free, top, ps,
     # ss, dmesg into one execution so the AI doesn't need 7 round trips for
     # a typical first triage. Individual diags remain available for follow-up.

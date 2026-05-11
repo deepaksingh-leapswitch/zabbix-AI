@@ -63,6 +63,7 @@ class InvestigationRunner:
         for inst in self.settings.zabbix_instances:
             self._zabbix_clients[inst.name] = ZabbixClient(
                 inst.name, str(inst.url), inst.token.get_secret_value(),
+                memory=self._mem,
             )
         tools_zabbix.register_tools()
         tools_diag.register_tools()
@@ -91,7 +92,10 @@ class InvestigationRunner:
                 api_key=self.settings.hostbill.api_key.get_secret_value(),
             )
 
-        claude = ClaudeClient(api_key=self.settings.anthropic_api_key.get_secret_value())
+        claude = ClaudeClient(
+            api_key=self.settings.anthropic_api_key.get_secret_value(),
+            memory=self._mem,
+        )
         hb_cfg = self.settings.host_briefing
         self._orch = Orchestrator(
             claude=claude,
