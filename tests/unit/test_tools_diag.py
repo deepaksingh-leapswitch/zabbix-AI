@@ -212,6 +212,7 @@ def test_v14_tools_in_allowlist():
     assert "diag.network" in ALLOWED_DIAG_KEYS
     assert "diag.cert_expiry" in ALLOWED_DIAG_KEYS
     assert "diag.smart" in ALLOWED_DIAG_KEYS
+    assert "diag.disk_usage" in ALLOWED_DIAG_KEYS
 
 
 def test_v14_tools_registered():
@@ -220,6 +221,15 @@ def test_v14_tools_registered():
     assert "diag.network" in ALLOWED_TOOLS
     assert "diag.cert_expiry" in ALLOWED_TOOLS
     assert "diag.smart" in ALLOWED_TOOLS
+    assert "diag.disk_usage" in ALLOWED_TOOLS
+
+
+async def test_diag_disk_usage_dispatches(context, fake_client):
+    register_tools()
+    await dispatch("diag.disk_usage", {"hostid": 7, "instance": "monitoring"},
+                   context=context)
+    _method, params = fake_client.call.await_args.args
+    assert "disk_usage" in params["scriptid"]
 
 
 async def test_diag_network_dispatches(context, fake_client):

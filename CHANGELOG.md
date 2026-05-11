@@ -2,6 +2,28 @@
 
 All notable releases. Format follows [keepachangelog.com](https://keepachangelog.com/).
 
+## v1.4.1 — 2026-05-11
+
+**New diag tool — `diag.disk_usage`.** Closes the gap observed on
+investigation #7 (deepak-vm, C: 92.6% full) where the AI had a process
+list but no folder-level view, so it recommended RDP instead of being
+concrete. With this tool the AI can now say "`C:\Users\…\AppData\Local\…`
+is 47 GB" directly from the investigation.
+
+- **Linux**: `df -hP` + `du -hxd 3 / | sort -hr | head -40` wrapped in
+  `timeout 30`. Stays on one filesystem.
+- **Windows**: per-fixed-drive used/free/percent, plus top 15 folders
+  by recursive size on each (depth-3 cap to bound walk time on big
+  NTFS volumes).
+- Tool description tells the model: **ALWAYS** call this on a
+  disk-space alert before suggesting RDP/SSH.
+- `deploy/zabbix-agent/zabbix-ai-diag.conf` gains a matching AllowKey
+  line for the Linux body. Windows hosts using
+  `system.run[powershell*]` need no change.
+- New tests: `test_v14_tools_in_allowlist` extended; new
+  `test_diag_disk_usage_dispatches` and
+  `test_diag_disk_usage_defined_for_both_os`.
+
 ## v1.4.0 — 2026-05-11
 
 **Admin tooling + 3 new diag tools.**

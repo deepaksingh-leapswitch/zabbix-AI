@@ -199,6 +199,18 @@ async def test_v14_tools_create_scripts_for_both_os():
         assert index.scriptid(name, "windows") is not None
 
 
+def test_diag_disk_usage_defined_for_both_os():
+    d = _diag("diag.disk_usage")
+    assert d is not None
+    assert d.linux is not None and d.windows is not None
+    # Linux body must invoke du with the depth + sort pipe the AllowKey expects
+    assert "du -hxd 3" in d.linux
+    assert "sort -hr" in d.linux
+    # Windows variant must be base64-encoded PowerShell with disk-summary cues
+    assert "powershell" in d.windows
+    assert "EncodedCommand" in d.windows
+
+
 async def test_v14_cert_expiry_create_includes_manualinput_validator():
     """cert_expiry's bootstrap params must include the validator regex."""
     d = _diag("diag.cert_expiry")

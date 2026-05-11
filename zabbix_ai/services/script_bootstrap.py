@@ -269,6 +269,54 @@ _WINDOWS_SMART_PS = (
     "}"
 )
 
+# Linux disk usage: which folders are eating the drive?
+# `du -hxd 3 /` stays on one filesystem, walks 3 levels deep, prints
+# sizes; sort+head returns the 40 biggest paths. Wrapped in `timeout`
+# because deep du on a large drive can pin the agent. AllowKey must
+# match exactly — see deploy/zabbix-agent/zabbix-ai-diag.conf.
+_LINUX_DISK_USAGE = (
+    "echo '=== filesystems ==='; df -hP 2>/dev/null; echo; "
+    "echo '=== top 40 dirs by size (depth 3, max 30s) ==='; "
+    "timeout 30 du -hxd 3 / 2>/dev/null | sort -hr | head -40"
+)
+
+# Windows disk usage: per-drive used/free + top 15 folders by recursive
+# size on each fixed drive. Capped at depth-3 to bound walk time on
+# large NTFS volumes — Get-ChildItem -Recurse on a 200 GB drive can
+# take minutes otherwise. Errors swallowed so a locked subdir doesn't
+# blank the whole report.
+_WINDOWS_DISK_USAGE_PS = (
+    "$ProgressPreference='SilentlyContinue';"
+    "$ErrorActionPreference='SilentlyContinue';"
+    "Write-Output '=== drive summary ===';"
+    "Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | "
+    "Select-Object @{N='Drive';E={$_.DeviceID}},"
+    "  @{N='UsedGB';E={[math]::Round(($_.Size-$_.FreeSpace)/1GB,1)}},"
+    "  @{N='FreeGB';E={[math]::Round($_.FreeSpace/1GB,1)}},"
+    "  @{N='TotalGB';E={[math]::Round($_.Size/1GB,1)}},"
+    "  @{N='PctUsed';E={"
+    "    if($_.Size){[math]::Round(100*($_.Size-$_.FreeSpace)/$_.Size,1)}"
+    "    else{0}}} | "
+    "Format-Table -AutoSize | Out-String;"
+    "foreach ($d in "
+    "(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3').DeviceID) {"
+    "  Write-Output \"=== $d top 15 folders by size (depth 3) ===\";"
+    "  Get-ChildItem -LiteralPath \"$d\\\\\" -Directory -Force "
+    "    -ErrorAction SilentlyContinue | "
+    "  ForEach-Object {"
+    "    $bytes = (Get-ChildItem -LiteralPath $_.FullName -Recurse -Depth 3 "
+    "                -Force -File -ErrorAction SilentlyContinue | "
+    "              Measure-Object -Property Length -Sum "
+    "                -ErrorAction SilentlyContinue).Sum;"
+    "    [PSCustomObject]@{Path=$_.FullName;"
+    "      SizeGB=if($bytes){[math]::Round($bytes/1GB,2)}else{0}}"
+    "  } | "
+    "  Sort-Object SizeGB -Descending | "
+    "  Select-Object -First 15 | "
+    "  Format-Table -AutoSize | Out-String"
+    "}"
+)
+
 # Linux multi-command snapshot — runs through /bin/sh on the agent.
 _LINUX_SNAPSHOT = (
     "echo '=== uptime ==='; uptime; "
@@ -481,6 +529,13 @@ DIAG_DEFINITIONS: list[DiagDef] = [
             "before disk-intensive operations.",
             linux=_LINUX_SMART,
             windows=_ps_encoded(_WINDOWS_SMART_PS)),
+    DiagDef("diag.disk_usage",
+            "Top folders / directories by size — answers 'what's filling "
+            "the disk?'. Linux: `du -hxd 3 /` for top 40 paths. Windows: "
+            "per-fixed-drive used/free plus top 15 folders (depth 3). "
+            "Call this on any disk-space alert before suggesting RDP/SSH.",
+            linux=_LINUX_DISK_USAGE,
+            windows=_ps_encoded(_WINDOWS_DISK_USAGE_PS)),
     # Consolidated first-look snapshot. Bundles uptime, df, free, top, ps,
     # ss, dmesg into one execution so the AI doesn't need 7 round trips for
     # a typical first triage. Individual diags remain available for follow-up.

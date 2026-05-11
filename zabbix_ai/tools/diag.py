@@ -22,6 +22,7 @@ ALLOWED_DIAG_KEYS = {
     "diag.mysql_status", "diag.mysql_processlist", "diag.apache_status",
     "diag.snapshot", "diag.mail_queue",
     "diag.network", "diag.cert_expiry", "diag.smart",
+    "diag.disk_usage",
 }
 
 
@@ -166,6 +167,14 @@ def register_tools() -> None:
         "SMART health and wear indicators for all physical disks. Use "
         "proactively when investigating I/O errors, slow performance, or "
         "before disk-intensive operations.",
+    )
+    _register_simple(
+        "diag.disk_usage",
+        "Top folders by size — answers 'what's eating the disk?'. "
+        "Linux: depth-3 `du` summary plus df. Windows: per-fixed-drive "
+        "used/free plus top 15 folders. ALWAYS call this on a disk-space "
+        "alert before suggesting RDP/SSH or recommending the operator "
+        "check manually.",
     )
 
     @register(
