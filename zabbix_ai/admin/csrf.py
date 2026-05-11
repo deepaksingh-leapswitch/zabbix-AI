@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hmac
 import secrets
+from urllib.parse import parse_qs
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -64,15 +65,26 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             and path.startswith("/admin/")
             and path not in _CSRF_EXEMPT
         ):
-            # Read token from header or form body
-            submitted = request.headers.get("X-CSRF-Token")
-            if not submitted:
-                # Parse form body (content-type application/x-www-form-urlencoded)
-                try:
-                    form = await request.form()
-                    submitted = form.get("csrf_token", "")
-                except Exception:
-                    submitted = ""
+            # Prefer the header (HTMX, JSON callers). Fall back to the form
+            # body — but only for urlencoded forms, and we MUST replay the
+            # body so the downstream route still sees it. BaseHTTPMiddleware
+            # consumes the receive stream once, so we buffer + patch _receive.
+            submitted = request.headers.get("X-CSRF-Token", "")
+            content_type = request.headers.get("content-type", "").lower()
+            if not submitted and content_type.startswith(
+                "application/x-www-form-urlencoded"
+            ):
+                body_bytes = await request.body()
+                parsed = parse_qs(body_bytes.decode("utf-8", errors="ignore"))
+                submitted = (parsed.get("csrf_token", [""])[0] or "")
+
+                async def _replay_receive(
+                    _body: bytes = body_bytes,
+                ) -> dict:
+                    return {"type": "http.request", "body": _body,
+                            "more_body": False}
+
+                request._receive = _replay_receive  # type: ignore[attr-defined]
 
             if not submitted or not hmac.compare_digest(submitted, token):
                 return Response(
