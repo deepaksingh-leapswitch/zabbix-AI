@@ -2,6 +2,25 @@
 
 All notable releases. Format follows [keepachangelog.com](https://keepachangelog.com/).
 
+## v1.4.2 — 2026-05-11
+
+**Fix `diag.disk_usage` timeout on Windows.** The v1.4.1 implementation
+used `Get-ChildItem -Recurse -Depth 3`, which on a 200 GB NTFS volume
+took several minutes and tripped the 30s script timeout. Investigation
+#8 on deepak-vm came back "Timeout while executing" instead of folder
+sizes.
+
+Replaced with `Scripting.FileSystemObject.GetFolder().Size` (native COM,
+reads NTFS metadata) on top-level folders only. Wrapped in a 22-second
+per-drive stopwatch budget — if the budget runs out it emits what's
+been measured plus "N folders skipped" rather than failing outright.
+Typical scan time is now ~5-15 s per fixed drive.
+
+Linux variant unchanged.
+
+The bootstrap's `script.update` path will overwrite the v1.4.1 script
+body on the next investigation, so no manual cleanup is needed.
+
 ## v1.4.1 — 2026-05-11
 
 **New diag tool — `diag.disk_usage`.** Closes the gap observed on

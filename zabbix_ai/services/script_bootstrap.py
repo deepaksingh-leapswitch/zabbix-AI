@@ -286,6 +286,13 @@ _LINUX_DISK_USAGE = (
 # take minutes otherwise. Errors swallowed so a locked subdir doesn't
 # blank the whole report.
 _WINDOWS_DISK_USAGE_PS = (
+    # Drive summary first — always cheap. Then for each fixed drive, walk
+    # top-level folders only (NO -Recurse) and use FileSystemObject.Size
+    # (native COM, reads NTFS metadata) for each. On a 200 GB drive this
+    # is typically 5-15s versus 5+ minutes for Get-ChildItem -Recurse.
+    # A 22-second per-drive stopwatch budget bails out and emits what's
+    # been computed so far — better than the AI getting a timeout error
+    # with no data.
     "$ProgressPreference='SilentlyContinue';"
     "$ErrorActionPreference='SilentlyContinue';"
     "Write-Output '=== drive summary ===';"
@@ -298,22 +305,28 @@ _WINDOWS_DISK_USAGE_PS = (
     "    if($_.Size){[math]::Round(100*($_.Size-$_.FreeSpace)/$_.Size,1)}"
     "    else{0}}} | "
     "Format-Table -AutoSize | Out-String;"
+    "$fso = New-Object -ComObject Scripting.FileSystemObject;"
     "foreach ($d in "
     "(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3').DeviceID) {"
-    "  Write-Output \"=== $d top 15 folders by size (depth 3) ===\";"
+    "  Write-Output \"=== $d top folders (FSO size, 22s/drive budget) ===\";"
+    "  $sw = [Diagnostics.Stopwatch]::StartNew();"
+    "  $rows = New-Object Collections.ArrayList;"
+    "  $skipped = 0;"
     "  Get-ChildItem -LiteralPath \"$d\\\\\" -Directory -Force "
     "    -ErrorAction SilentlyContinue | "
     "  ForEach-Object {"
-    "    $bytes = (Get-ChildItem -LiteralPath $_.FullName -Recurse -Depth 3 "
-    "                -Force -File -ErrorAction SilentlyContinue | "
-    "              Measure-Object -Property Length -Sum "
-    "                -ErrorAction SilentlyContinue).Sum;"
-    "    [PSCustomObject]@{Path=$_.FullName;"
-    "      SizeGB=if($bytes){[math]::Round($bytes/1GB,2)}else{0}}"
-    "  } | "
-    "  Sort-Object SizeGB -Descending | "
-    "  Select-Object -First 15 | "
-    "  Format-Table -AutoSize | Out-String"
+    "    if ($sw.ElapsedMilliseconds -gt 22000) { $skipped++; return }"
+    "    try {"
+    "      $bytes = $fso.GetFolder($_.FullName).Size;"
+    "      [void]$rows.Add([PSCustomObject]@{"
+    "        Path = $_.FullName;"
+    "        SizeGB = if ($bytes) {[math]::Round($bytes/1GB,2)} else {0}"
+    "      })"
+    "    } catch {}"
+    "  };"
+    "  $rows | Sort-Object SizeGB -Descending | Select-Object -First 15 | "
+    "    Format-Table -AutoSize | Out-String;"
+    "  if ($skipped) { Write-Output \"  ($skipped folder(s) skipped — budget exhausted)\" }"
     "}"
 )
 
