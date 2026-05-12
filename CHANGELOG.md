@@ -2,6 +2,17 @@
 
 All notable releases. Format follows [keepachangelog.com](https://keepachangelog.com/).
 
+## v1.5.2 — 2026-05-12
+
+**Host-mode write-back.** Inv #15 was a right-click from the host
+page (not a problem) so `{EVENT.ID}` didn't resolve; v1.5.1's
+write-back required a specific eventid and silently no-op'd. Added
+`post_summary_to_host_open_problems()` — when no eventid is supplied
+but a hostid is, resolves the host's top-3-by-severity open problems
+via `problem.get` and writes the same comment against each. Both
+adapters (manual right-click and auto-investigate webhook) prefer
+eventid when present, fall back to host-mode otherwise.
+
 ## v1.5.1 — 2026-05-12
 
 Two fixes driven by inv #14 (Zabbix server itself):

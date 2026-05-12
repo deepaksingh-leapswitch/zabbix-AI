@@ -59,3 +59,55 @@ async def post_summary_to_event(
             eventid, exc,
         )
         return False
+
+
+async def post_summary_to_host_open_problems(
+    zabbix_client: Any,
+    *,
+    hostid: int | str,
+    summary: str,
+    source: str = "manual",
+    max_targets: int = 3,
+) -> int:
+    """Host-mode fallback when no specific eventid is available.
+
+    Resolves the host's currently-open problems (severity DESC) and writes
+    the same summary as a comment against the top ``max_targets``. This is
+    what makes the right-click "Investigate with AI" from a *host page*
+    (vs from a *problem*) still leave a paper trail in the Zabbix UI.
+
+    Returns the number of events successfully commented on. Never raises.
+    """
+    if not hostid or zabbix_client is None:
+        return 0
+    try:
+        problems = await zabbix_client.call("problem.get", {
+            "hostids": [str(hostid)],
+            "output": ["eventid", "severity", "name"],
+            "recent": False,
+            "sortfield": ["severity", "eventid"],
+            "sortorder": "DESC",
+            "limit": max_targets,
+        })
+    except Exception as exc:
+        _log.warning("problem.get for host %s failed: %s", hostid, exc)
+        return 0
+    if not problems:
+        return 0
+    eventids = [str(p["eventid"]) for p in problems
+                if p.get("eventid")][:max_targets]
+    if not eventids:
+        return 0
+    try:
+        await zabbix_client.call("event.acknowledge", {
+            "eventids": eventids,
+            "action": 4,
+            "message": format_ack_message(summary, source=source),
+        })
+        return len(eventids)
+    except Exception as exc:  # pragma: no cover - logged, never raised
+        _log.warning(
+            "event.acknowledge host-mode writeback failed for host %s: %s",
+            hostid, exc,
+        )
+        return 0

@@ -293,19 +293,25 @@ def build_router(settings: Settings) -> APIRouter:
                 # Resolve the hostname for the Slack title (best-effort).
                 hostname = ctx.hostname or ""
 
-                # Write summary back to Zabbix as an event.acknowledge
-                # comment via the shared helper (same logic used by the
-                # manual right-click adapter).
-                if instance and instance in runner._zabbix_clients and eventid:
+                # Write summary back to Zabbix as a comment. Prefer the
+                # specific eventid (auto-webhook usually has one); fall
+                # back to host-mode (top-3 open problems) if not.
+                if instance and instance in runner._zabbix_clients:
                     from zabbix_ai.services.zabbix_writeback import (
                         post_summary_to_event,
+                        post_summary_to_host_open_problems,
                     )
-                    await post_summary_to_event(
-                        runner._zabbix_clients[instance],
-                        eventid=eventid,
-                        summary=result.summary,
-                        source="auto",
-                    )
+                    zc = runner._zabbix_clients[instance]
+                    if eventid:
+                        await post_summary_to_event(
+                            zc, eventid=eventid,
+                            summary=result.summary, source="auto",
+                        )
+                    elif hostid:
+                        await post_summary_to_host_open_problems(
+                            zc, hostid=hostid,
+                            summary=result.summary, source="auto",
+                        )
         except BudgetExceededError as e:
             _log.info("auto-investigate paused by budget gate: %s", e)
             return JSONResponse({"status": "paused_budget",

@@ -98,20 +98,30 @@ def build_router(settings: Settings) -> APIRouter:
                     yield {"event": ev["event"],
                            "data": json.dumps(ev["data"], default=str)}
 
-                # After the SSE stream completes, post the summary back
-                # to the Zabbix event as a comment so the right-click
-                # flow also leaves a paper trail in the Zabbix UI.
-                if eventid is not None and final_summary:
+                # After the SSE stream completes, post the summary back to
+                # Zabbix as a comment so the right-click flow leaves a
+                # paper trail in the Zabbix UI. If we have a specific
+                # eventid, write to it; otherwise (right-clicked from
+                # the host page, no problem-context macro) write to the
+                # host's top-3-by-severity open problems instead.
+                if final_summary:
                     zclients = getattr(runner, "_zabbix_clients", {}) or {}
                     zc = zclients.get(instance)
                     if zc is not None:
                         from zabbix_ai.services.zabbix_writeback import (
                             post_summary_to_event,
+                            post_summary_to_host_open_problems,
                         )
-                        await post_summary_to_event(
-                            zc, eventid=eventid,
-                            summary=final_summary, source="manual",
-                        )
+                        if eventid is not None:
+                            await post_summary_to_event(
+                                zc, eventid=eventid,
+                                summary=final_summary, source="manual",
+                            )
+                        elif hostid is not None:
+                            await post_summary_to_host_open_problems(
+                                zc, hostid=hostid,
+                                summary=final_summary, source="manual",
+                            )
 
         return EventSourceResponse(event_gen())
 
