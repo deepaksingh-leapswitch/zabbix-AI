@@ -2,6 +2,53 @@
 
 All notable releases. Format follows [keepachangelog.com](https://keepachangelog.com/).
 
+## v1.5.3 — 2026-05-12
+
+**Closing the gap surfaced by inv 14/15 on monitoring.leapswitch.com.**
+The AI saw the symptoms (MariaDB CPU, disk 96%, housekeeper backlog)
+but couldn't see the root *config*: `innodb_buffer_pool_size=6G`,
+`tmp_table_size=16M`, `ibdata1=91GB`, uncompressed log files. Five new
+tools and a system-prompt directive that together let the AI deliver
+the same "raise buffer pool to 10G, raise tmp_table_size to 256M,
+compress logs" answer I had to type by hand.
+
+### New diag tools (Linux only)
+
+| Tool | What it surfaces |
+|---|---|
+| `diag.mysql_config` | ~30 MariaDB tuning variables (`innodb_buffer_pool_*`, `tmp_table_size`, `max_heap_table_size`, log/binlog, query cache, etc.) |
+| `diag.mysql_tables` | Top 25 tables by `DATA_LENGTH` + `INDEX_LENGTH` plus `ls -lh /var/lib/mysql/ib*` to expose `ibdata1` bloat |
+| `diag.mysql_stats` | Computed hit ratios — buffer pool hit %, in-memory tmp-table %, dirty-page %, slow-queries/hour |
+| `diag.disk_largest_files` | Top 30 individual files by size (`find / -xdev -size +500M`) — catches the single-file culprits `diag.disk_usage` hides at the folder level |
+| `diag.read_config` | Read any file under an `/etc/` allowlist (zabbix, my.cnf*, logrotate.d, nginx, apache2, httpd, mysql, mariadb, systemd, sysctl.d, fail2ban, postfix, exim, dovecot). Server-side regex + Zabbix manualinput validator both block traversal. |
+
+### System prompt directives
+
+- **Capacity-vs-config classifier.** Before finalising `suggested_actions`,
+  the AI must classify the root cause as `config` / `capacity` /
+  `config-then-capacity` and ensure capacity issues land a dedicated
+  "Scale-out" section (proxy / vertical scale / scope reduction).
+- **MariaDB tool-chaining hint.** When DB symptoms are present, the AI
+  is instructed to call `diag.mysql_config`, `diag.mysql_stats`, and
+  `diag.mysql_tables` together, not just `diag.mysql_status`.
+- **Disk-fill follow-up.** `diag.disk_usage` showing a near-full folder
+  triggers a `diag.disk_largest_files` follow-up. Config suspicion
+  triggers `diag.read_config` on the relevant file.
+
+### AllowKey config
+
+`deploy/zabbix-agent/zabbix-ai-diag.conf` gains literal `system.run[…]`
+lines for all four new non-parameterised bodies (byte-for-byte match
+with the script bodies registered server-side) plus
+`AllowKey=system.run[head -200 *]` for `diag.read_config` (path
+constrained by the server-side regex; `head` is read-only).
+
+### Tests
+
+389 tests pass. New: 12 unit tests for the v1.5.3 tools, including
+`diag.read_config` allowlist (6 accepted paths + 6 rejected including
+`/etc/passwd`, `/etc/shadow`, `/root/.ssh/id_rsa`, `..` traversal).
+
 ## v1.5.2 — 2026-05-12
 
 **Host-mode write-back.** Inv #15 was a right-click from the host

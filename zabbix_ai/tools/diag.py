@@ -13,6 +13,8 @@ seven. The individual diags remain available for follow-up drilling.
 """
 from __future__ import annotations
 
+import re
+
 from zabbix_ai.tools import register
 
 ALLOWED_DIAG_KEYS = {
@@ -23,7 +25,22 @@ ALLOWED_DIAG_KEYS = {
     "diag.snapshot", "diag.mail_queue",
     "diag.network", "diag.cert_expiry", "diag.smart",
     "diag.disk_usage", "diag.windows_winsxs",
+    # v1.5.3 — MariaDB / config / large-file investigation
+    "diag.mysql_config", "diag.mysql_tables", "diag.mysql_stats",
+    "diag.disk_largest_files", "diag.read_config",
 }
+
+
+# Server-side allowlist regex for diag.read_config. Mirrored verbatim
+# from script_bootstrap._CONFIG_PATH_VALIDATOR; Zabbix re-validates with
+# the same regex via manualinput_validator. Keeping both layers in sync
+# means a config-path drift in one is caught by the other.
+_CONFIG_PATH_RE = re.compile(
+    r"^/etc/(?:my\.cnf(?:\.d/[A-Za-z0-9_.-]+(?:\.cnf|\.conf|\.preset)?)?"
+    r"|zabbix(?:/[A-Za-z0-9_.-]+(?:\.conf|\.cfg))?"
+    r"|(?:logrotate\.d|nginx|apache2|httpd|mysql|mariadb|systemd/system"
+    r"|sysctl\.d|fail2ban|postfix|exim|dovecot)/[A-Za-z0-9_./-]+)$"
+)
 
 
 def _client(ctx: dict, instance: str):
@@ -200,6 +217,84 @@ def register_tools() -> None:
         "-Recurse -Force ; net start wuauserv\n"
         "  -- purge Windows Update cache",
     )
+    _register_simple(
+        "diag.mysql_config",
+        "Dump key MariaDB/MySQL tuning parameters that affect performance. "
+        "Reads ~30 variables (innodb_buffer_pool*, tmp_table_size, "
+        "max_heap_table_size, max_connections, innodb_io_capacity, "
+        "innodb_log_file_size, slow_query_log*, query_cache*, "
+        "thread_cache_size, table_open_cache, sort_buffer_size, etc.). "
+        "Call this when investigating any MariaDB/MySQL performance issue "
+        "— most resolutions require knowing the current "
+        "`innodb_buffer_pool_size` vs the data size.",
+    )
+    _register_simple(
+        "diag.mysql_tables",
+        "Top tables by size across all databases on this MariaDB/MySQL "
+        "instance, plus the size of the InnoDB shared tablespace "
+        "(`ibdata1`) and redo logs. Reveals which tables to partition/prune "
+        "and whether `ibdata1` is bloated (a known MariaDB issue when "
+        "innodb_file_per_table was off historically or undo logs accumulated).",
+    )
+    _register_simple(
+        "diag.mysql_stats",
+        "Computed MariaDB/MySQL health metrics: buffer pool hit ratio, "
+        "in-memory vs disk temp-table ratio, active threads, slow-query "
+        "rate, dirty-page ratio. Use this to validate whether tuning is "
+        "needed (low hit ratio → buffer pool too small; high "
+        "disk-temp-table ratio → tmp_table_size too small).",
+    )
+    _register_simple(
+        "diag.disk_largest_files",
+        "Top 30 individual files by size across the root filesystem "
+        "(excludes mounted volumes via `-xdev`). Use this when "
+        "`diag.disk_usage` shows a folder is full — `diag.disk_usage` "
+        "groups by directory, this one finds the actual files (e.g. "
+        "uncompressed rotated logs, oversized binaries, stuck core dumps, "
+        "runaway log files).",
+    )
+
+    @register(
+        "diag.read_config",
+        description="Read a specific config file from a safe allowlist "
+                    "(Linux). Path must match one of: /etc/zabbix/*, "
+                    "/etc/my.cnf, /etc/my.cnf.d/*, /etc/logrotate.d/*, "
+                    "/etc/nginx/*, /etc/apache2/*, /etc/httpd/*, "
+                    "/etc/mysql/*, /etc/mariadb/*, /etc/systemd/system/*, "
+                    "/etc/sysctl.d/*, /etc/fail2ban/*, /etc/postfix/*, "
+                    "/etc/exim/*, /etc/dovecot/*. Returns the first 200 "
+                    "lines of the file. Use this when investigating "
+                    "config-related issues (e.g. `logrotate` not "
+                    "compressing, `zabbix_server.conf` missing tuning, "
+                    "`my.cnf` settings).",
+        schema={"type": "object",
+                "properties": {
+                    "hostid": {"type": "integer"},
+                    "instance": {"type": "string"},
+                    "path": {
+                        "type": "string",
+                        "description":
+                            "Absolute path to a config file under one of: "
+                            "/etc/zabbix, /etc/my.cnf*, /etc/logrotate.d, "
+                            "/etc/nginx, /etc/apache2, /etc/httpd, "
+                            "/etc/mysql, /etc/mariadb, /etc/systemd/system, "
+                            "/etc/sysctl.d, /etc/fail2ban, /etc/postfix, "
+                            "/etc/exim, /etc/dovecot",
+                    }},
+                "required": ["hostid", "instance", "path"]},
+    )
+    async def _read_config(*, hostid: int, instance: str, path: str,
+                           _ctx: dict) -> str:
+        # Defense in depth — Zabbix re-validates via manualinput regex.
+        # Block obvious traversal patterns first; the allowlist regex
+        # rejects them too but an explicit check makes the error clearer.
+        if ".." in path or "//" in path:
+            raise ValueError("path traversal blocked")
+        if not _CONFIG_PATH_RE.fullmatch(path):
+            raise ValueError(f"config path '{path}' not in allowlist")
+        return await _run_diag(
+            _ctx, instance, hostid, "diag.read_config", manualinput=path,
+        )
 
     @register(
         "diag.cert_expiry",

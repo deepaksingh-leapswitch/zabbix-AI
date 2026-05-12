@@ -329,3 +329,112 @@ async def test_diag_cert_expiry_accepts_exactly_10_endpoints(
     )
     _method, params = fake_client.call.await_args.args
     assert params["manualinput"] == ten
+
+
+# ---------------- v1.5.3 tools: mysql_config/tables/stats, disk_largest_files,
+#                                read_config ----------------
+
+def test_v153_tools_in_allowlist():
+    for name in (
+        "diag.mysql_config",
+        "diag.mysql_tables",
+        "diag.mysql_stats",
+        "diag.disk_largest_files",
+        "diag.read_config",
+    ):
+        assert name in ALLOWED_DIAG_KEYS, f"{name} missing from ALLOWED_DIAG_KEYS"
+
+
+def test_v153_tools_registered():
+    from zabbix_ai.tools import ALLOWED_TOOLS
+    register_tools()
+    for name in (
+        "diag.mysql_config",
+        "diag.mysql_tables",
+        "diag.mysql_stats",
+        "diag.disk_largest_files",
+        "diag.read_config",
+    ):
+        assert name in ALLOWED_TOOLS, f"{name} not registered"
+
+
+async def test_diag_mysql_config_dispatches(context, fake_client):
+    register_tools()
+    await dispatch("diag.mysql_config",
+                   {"hostid": 7, "instance": "monitoring"},
+                   context=context)
+    _method, params = fake_client.call.await_args.args
+    assert "mysql_config" in params["scriptid"]
+
+
+async def test_diag_mysql_tables_dispatches(context, fake_client):
+    register_tools()
+    await dispatch("diag.mysql_tables",
+                   {"hostid": 7, "instance": "monitoring"},
+                   context=context)
+    _method, params = fake_client.call.await_args.args
+    assert "mysql_tables" in params["scriptid"]
+
+
+async def test_diag_mysql_stats_dispatches(context, fake_client):
+    register_tools()
+    await dispatch("diag.mysql_stats",
+                   {"hostid": 7, "instance": "monitoring"},
+                   context=context)
+    _method, params = fake_client.call.await_args.args
+    assert "mysql_stats" in params["scriptid"]
+
+
+async def test_diag_disk_largest_files_dispatches(context, fake_client):
+    register_tools()
+    await dispatch("diag.disk_largest_files",
+                   {"hostid": 7, "instance": "monitoring"},
+                   context=context)
+    _method, params = fake_client.call.await_args.args
+    assert "disk_largest_files" in params["scriptid"]
+
+
+_READ_CONFIG_ACCEPTED = [
+    "/etc/zabbix/zabbix_server.conf",
+    "/etc/my.cnf",
+    "/etc/my.cnf.d/server.cnf",
+    "/etc/logrotate.d/syslog",
+    "/etc/nginx/nginx.conf",
+    "/etc/sysctl.d/99-tuning.conf",
+]
+
+
+_READ_CONFIG_REJECTED = [
+    "/etc/passwd",
+    "/etc/shadow",
+    "/root/.ssh/id_rsa",
+    "/var/log/messages",
+    "/etc/zabbix/../../etc/passwd",   # traversal
+    "/tmp/x.conf",                     # not in allowlist
+]
+
+
+@pytest.mark.parametrize("path", _READ_CONFIG_ACCEPTED)
+async def test_diag_read_config_accepts_allowlisted_paths(
+        context, fake_client, path,
+):
+    register_tools()
+    await dispatch(
+        "diag.read_config",
+        {"hostid": 7, "instance": "monitoring", "path": path},
+        context=context,
+    )
+    _method, params = fake_client.call.await_args.args
+    assert params["manualinput"] == path
+    assert "read_config" in params["scriptid"]
+
+
+@pytest.mark.parametrize("path", _READ_CONFIG_REJECTED)
+async def test_diag_read_config_rejects_disallowed_paths(context, path):
+    register_tools()
+    with pytest.raises(ValueError):
+        await dispatch(
+            "diag.read_config",
+            {"hostid": 7, "instance": "monitoring", "path": path},
+            context=context,
+        )

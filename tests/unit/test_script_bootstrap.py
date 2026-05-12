@@ -239,3 +239,79 @@ async def test_v14_cert_expiry_create_includes_manualinput_validator():
         assert params["manualinput"] == "1"
         assert "host:port" in params["manualinput_prompt"]
         assert params["manualinput_validator"] == d.manualinput_validator
+
+
+# ---------------- v1.5.3 tools: mysql_config / mysql_tables / mysql_stats /
+#                                disk_largest_files / read_config ----------
+
+def test_v153_diag_mysql_config_linux_only():
+    d = _diag("diag.mysql_config")
+    assert d is not None
+    assert d.linux is not None
+    assert d.windows is None
+    # Body must touch the buffer-pool variable AllowKey will exact-match on
+    assert "innodb_buffer_pool_size" in d.linux
+    # One line for AllowKey reproducibility
+    assert "\n" not in d.linux
+
+
+def test_v153_diag_mysql_tables_linux_only():
+    d = _diag("diag.mysql_tables")
+    assert d is not None
+    assert d.linux is not None
+    assert d.windows is None
+    assert "information_schema.tables" in d.linux
+    # Surfaces ibdata1 — the whole point of this tool
+    assert "/var/lib/mysql/ib" in d.linux
+    assert "\n" not in d.linux
+
+
+def test_v153_diag_mysql_stats_linux_only():
+    d = _diag("diag.mysql_stats")
+    assert d is not None
+    assert d.linux is not None
+    assert d.windows is None
+    assert "buffer_pool_hit_ratio" in d.linux
+    assert "tmp_tables_in_memory_ratio" in d.linux
+    assert "\n" not in d.linux
+
+
+def test_v153_diag_disk_largest_files_linux_only():
+    d = _diag("diag.disk_largest_files")
+    assert d is not None
+    assert d.linux is not None
+    assert d.windows is None
+    assert "find / -xdev" in d.linux
+    assert "\n" not in d.linux
+
+
+def test_v153_diag_read_config_linux_only_and_parameterised():
+    d = _diag("diag.read_config")
+    assert d is not None
+    assert d.linux is not None
+    assert d.windows is None
+    assert d.manualinput is True
+    assert d.manualinput_arg_name == "path"
+    assert "{MANUALINPUT}" in d.linux
+    # The validator regex must accept the canonical allowlisted paths and
+    # reject obviously-bad inputs (defense in depth — server-side regex
+    # in tools/diag.py is the other half).
+    import re as _re
+    pat = _re.compile(d.manualinput_validator)
+    for ok in (
+        "/etc/zabbix/zabbix_server.conf",
+        "/etc/my.cnf",
+        "/etc/my.cnf.d/server.cnf",
+        "/etc/logrotate.d/syslog",
+        "/etc/nginx/nginx.conf",
+        "/etc/sysctl.d/99-tuning.conf",
+    ):
+        assert pat.fullmatch(ok), f"validator should accept {ok}"
+    for bad in (
+        "/etc/passwd",
+        "/etc/shadow",
+        "/root/.ssh/id_rsa",
+        "/var/log/messages",
+        "/tmp/x.conf",
+    ):
+        assert not pat.fullmatch(bad), f"validator must reject {bad}"

@@ -394,6 +394,102 @@ _WINDOWS_WINSXS_PS = (
     "\"Total measured: $([math]::Round($total/1GB,2)) GB.\""
 )
 
+# MariaDB / MySQL tuning-parameter dump. Reads ~30 of the variables that
+# actually affect performance (innodb buffer pool, tmp/heap tables,
+# connections, IO capacity, log files, slow-query log, query cache,
+# thread/table caches, sort/join/read buffers, binlog). One line so the
+# AllowKey exact-match works — body must match deploy/zabbix-agent/
+# zabbix-ai-diag.conf byte-for-byte. Errors from the mysql CLI go to
+# /dev/null so an authentication failure surfaces as empty stdout rather
+# than leaking credentials in the error.
+_LINUX_MYSQL_CONFIG = (
+    "mysql --defaults-file=/etc/zabbix/.my.cnf -e \"SELECT @@version AS "
+    "version, @@hostname AS host\\G SHOW GLOBAL VARIABLES WHERE Variable_name "
+    "IN ('innodb_buffer_pool_size','innodb_buffer_pool_instances',"
+    "'innodb_log_file_size','innodb_log_buffer_size','innodb_io_capacity',"
+    "'innodb_io_capacity_max','innodb_flush_log_at_trx_commit',"
+    "'innodb_file_per_table','tmp_table_size','max_heap_table_size',"
+    "'max_connections','max_user_connections','thread_cache_size',"
+    "'table_open_cache','table_definition_cache','sort_buffer_size',"
+    "'join_buffer_size','read_buffer_size','query_cache_type',"
+    "'query_cache_size','slow_query_log','long_query_time','log_bin',"
+    "'expire_logs_days','binlog_format','sync_binlog');\" 2>/dev/null"
+)
+
+# Top tables by size across all user databases on the MariaDB/MySQL
+# instance plus the InnoDB shared-tablespace / redo-log file sizes
+# (ibdata1, ib_logfile*). The trailing `ls -lh /var/lib/mysql/ib*`
+# reveals ibdata1 bloat when innodb_file_per_table=OFF historically.
+_LINUX_MYSQL_TABLES = (
+    "mysql --defaults-file=/etc/zabbix/.my.cnf -e \"SELECT TABLE_SCHEMA, "
+    "TABLE_NAME, TABLE_ROWS, ROUND(DATA_LENGTH/1024/1024/1024,2) AS data_gb, "
+    "ROUND(INDEX_LENGTH/1024/1024/1024,2) AS index_gb FROM "
+    "information_schema.tables WHERE TABLE_SCHEMA NOT IN ('mysql',"
+    "'information_schema','performance_schema','sys') ORDER BY "
+    "(DATA_LENGTH+INDEX_LENGTH) DESC LIMIT 25;\" 2>/dev/null; "
+    "echo '=== InnoDB system files ==='; ls -lh /var/lib/mysql/ib* 2>/dev/null"
+)
+
+# Computed MariaDB/MySQL health metrics: buffer pool hit ratio,
+# in-memory vs disk temp-table ratio, dirty/free buffer-pool pages,
+# slow-queries-per-hour. The awk block derives the ratios from the raw
+# global_status counters returned in the same query so the AI sees both
+# numbers and the derived insight in one response.
+_LINUX_MYSQL_STATS = (
+    "mysql --defaults-file=/etc/zabbix/.my.cnf -N -B -e \"SELECT "
+    "VARIABLE_NAME, VARIABLE_VALUE FROM information_schema.global_status "
+    "WHERE VARIABLE_NAME IN ('Innodb_buffer_pool_reads',"
+    "'Innodb_buffer_pool_read_requests','Created_tmp_disk_tables',"
+    "'Created_tmp_tables','Threads_running','Threads_connected',"
+    "'Slow_queries','Uptime','Innodb_buffer_pool_pages_data',"
+    "'Innodb_buffer_pool_pages_free','Innodb_buffer_pool_pages_dirty',"
+    "'Aborted_connects');\" 2>/dev/null | "
+    "awk 'BEGIN{FS=\"\\t\"} {v[$1]=$2} END{print \"=== raw counters ===\"; "
+    "for(k in v) printf \"%s: %s\\n\", k, v[k]; print \"\"; "
+    "print \"=== derived ratios ===\"; "
+    "rr=v[\"Innodb_buffer_pool_read_requests\"]+0; "
+    "r=v[\"Innodb_buffer_pool_reads\"]+0; "
+    "if(rr>0) printf \"buffer_pool_hit_ratio: %.4f%%\\n\", (1-r/rr)*100; "
+    "ct=v[\"Created_tmp_tables\"]+0; cd=v[\"Created_tmp_disk_tables\"]+0; "
+    "if(ct>0) printf \"tmp_tables_in_memory_ratio: %.2f%%\\n\", "
+    "(1-cd/ct)*100; "
+    "pd=v[\"Innodb_buffer_pool_pages_data\"]+0; "
+    "pf=v[\"Innodb_buffer_pool_pages_free\"]+0; "
+    "pdirty=v[\"Innodb_buffer_pool_pages_dirty\"]+0; total=pd+pf; "
+    "if(total>0) printf \"buffer_pool_fill: %.1f%%, dirty: %.1f%%\\n\", "
+    "100*pd/total, 100*pdirty/total; "
+    "u=v[\"Uptime\"]+0; sl=v[\"Slow_queries\"]+0; "
+    "if(u>0) printf \"slow_queries_per_hour: %.1f\\n\", sl*3600/u}'"
+)
+
+# Top 30 individual files by size across the root filesystem. `-xdev`
+# stops the walk at mount boundaries so other volumes don't blow the
+# 30s budget; `-size +500M` prunes the noise. Output two columns:
+# size_gb<TAB>path — keeps it parseable by the AI.
+_LINUX_DISK_LARGEST_FILES = (
+    "find / -xdev -type f -size +500M -printf '%s\\t%p\\n' 2>/dev/null | "
+    "sort -rn | head -30 | "
+    "awk 'BEGIN{print \"size_gb\\tpath\"} "
+    "{printf \"%.2fG\\t%s\\n\", $1/1024/1024/1024, $2}'"
+)
+
+# Read a config file from the safe allowlist. The path is server-side
+# validated against _CONFIG_PATH_RE in tools/diag.py and Zabbix
+# manualinput re-validates with the same regex. `head -200` caps the
+# output so a runaway nginx.conf doesn't blow the response budget.
+_LINUX_READ_CONFIG = "head -200 '{MANUALINPUT}' 2>&1"
+
+# Regex used both server-side (tools/diag.py) and as Zabbix manualinput
+# validator. Kept here so the bootstrap params stay in sync with the
+# tool-side validation — drift between the two would let one layer
+# accept what the other rejects.
+_CONFIG_PATH_VALIDATOR = (
+    r"^/etc/(?:my\.cnf(?:\.d/[A-Za-z0-9_.-]+(?:\.cnf|\.conf|\.preset)?)?"
+    r"|zabbix(?:/[A-Za-z0-9_.-]+(?:\.conf|\.cfg))?"
+    r"|(?:logrotate\.d|nginx|apache2|httpd|mysql|mariadb|systemd/system"
+    r"|sysctl\.d|fail2ban|postfix|exim|dovecot)/[A-Za-z0-9_./-]+)$"
+)
+
 # Linux multi-command snapshot — runs through /bin/sh on the agent.
 _LINUX_SNAPSHOT = (
     "echo '=== uptime ==='; uptime; "
@@ -622,6 +718,61 @@ DIAG_DEFINITIONS: list[DiagDef] = [
             "Windows updates and prints (does NOT execute) the cleanmgr / "
             "DISM / powercfg recovery commands an operator would run.",
             windows=_ps_encoded(_WINDOWS_WINSXS_PS)),
+    # v1.5.3 MariaDB / config / large-file diags. Linux-only — the user's
+    # MySQL hosts are all Linux. Windows variants can be added later if a
+    # Windows MySQL host shows up.
+    DiagDef("diag.mysql_config",
+            "Dump key MariaDB/MySQL tuning parameters that affect "
+            "performance. Reads ~30 variables (innodb_buffer_pool*, "
+            "tmp_table_size, max_heap_table_size, max_connections, "
+            "innodb_io_capacity, innodb_log_file_size, slow_query_log*, "
+            "query_cache*, thread_cache_size, table_open_cache, "
+            "sort_buffer_size, etc.). Call this when investigating any "
+            "MariaDB/MySQL performance issue — most resolutions require "
+            "knowing the current `innodb_buffer_pool_size` vs the data size.",
+            linux=_LINUX_MYSQL_CONFIG,
+            windows=None),
+    DiagDef("diag.mysql_tables",
+            "Top tables by size across all databases on this MariaDB/MySQL "
+            "instance, plus the size of the InnoDB shared tablespace "
+            "(`ibdata1`) and redo logs. Reveals which tables to "
+            "partition/prune and whether `ibdata1` is bloated (a known "
+            "MariaDB issue when innodb_file_per_table was off historically "
+            "or undo logs accumulated).",
+            linux=_LINUX_MYSQL_TABLES,
+            windows=None),
+    DiagDef("diag.mysql_stats",
+            "Computed MariaDB/MySQL health metrics: buffer pool hit ratio, "
+            "in-memory vs disk temp-table ratio, active threads, "
+            "slow-query rate, dirty-page ratio. Use this to validate "
+            "whether tuning is needed (low hit ratio → buffer pool too "
+            "small; high disk-temp-table ratio → tmp_table_size too small).",
+            linux=_LINUX_MYSQL_STATS,
+            windows=None),
+    DiagDef("diag.disk_largest_files",
+            "Top 30 individual files by size across the root filesystem "
+            "(excludes mounted volumes via `-xdev`). Use this when "
+            "`diag.disk_usage` shows a folder is full — `diag.disk_usage` "
+            "groups by directory, this one finds the actual files (e.g. "
+            "uncompressed rotated logs, oversized binaries, stuck core "
+            "dumps, runaway log files).",
+            linux=_LINUX_DISK_LARGEST_FILES,
+            windows=None),
+    DiagDef("diag.read_config",
+            "Read a specific config file from a safe allowlist (Linux). "
+            "Path must be under /etc/zabbix, /etc/my.cnf(.d), "
+            "/etc/logrotate.d, /etc/nginx, /etc/apache2, /etc/httpd, "
+            "/etc/mysql, /etc/mariadb, /etc/systemd/system, /etc/sysctl.d, "
+            "/etc/fail2ban, /etc/postfix, /etc/exim, /etc/dovecot. "
+            "Returns the first 200 lines. Use this when investigating "
+            "config-related issues (e.g. `logrotate` not compressing, "
+            "`zabbix_server.conf` missing tuning, `my.cnf` settings).",
+            linux=_LINUX_READ_CONFIG,
+            windows=None,
+            manualinput=True,
+            manualinput_prompt="absolute path to config file",
+            manualinput_validator=_CONFIG_PATH_VALIDATOR,
+            manualinput_arg_name="path"),
     # Consolidated first-look snapshot. Bundles uptime, df, free, top, ps,
     # ss, dmesg into one execution so the AI doesn't need 7 round trips for
     # a typical first triage. Individual diags remain available for follow-up.

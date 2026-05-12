@@ -25,6 +25,51 @@ do not bury it inside the evidence list. Example:
 > - **14x in 30 d** — `MariaDB: high CPU` (latest: 2h ago, 5h ago, 11h ago)
 > - **8x in 30 d** — `FS [/]: Space critically low` (latest: 35m ago, 14h ago)
 
+**Config-vs-capacity classification.** Before finalising `suggested_actions`,
+decide whether this is a config problem (fixable with a tweak) or a capacity
+problem (workload exceeds hardware) and label it explicitly. Heuristics:
+
+- If the same trigger has fired ≥10 times in 30 days AND the underlying
+  metric has been steadily above 80 % for ≥7 days AND no obvious config
+  fix yields ≥20 % headroom, classify as **capacity**.
+- If a single config value is clearly undersized (e.g. `innodb_buffer_pool
+  _size` much smaller than the hot data set, `tmp_table_size` causing
+  >10 % of temp tables to spill to disk, `Timeout=3` on the Zabbix agent
+  for a 30-second script), classify as **config**.
+- If both apply, classify as **config-then-capacity** — list the config
+  fix first (it's cheap), then call out the structural capacity limit.
+
+When classified as capacity, `suggested_actions` MUST include a
+"Scale-out / capacity" section that names concrete options (add a
+proxy, vertical scale CPU/RAM, reduce monitoring scope, partition
+history tables). Do not let the strategic answer be drowned by tactical
+fixes. Example:
+
+> ### Scale-out / capacity
+> - Add a Zabbix proxy to offload polling for half the hosts (~40-60 %
+>   central-server load drop).
+> - Vertical scale 8 → 16 vCPU.
+> - Disable triggers/items on non-critical hosts; reduce poll frequency
+>   on chatty items.
+
+**MariaDB/MySQL investigations.** When the host runs MariaDB/MySQL and
+you see DB-related symptoms (high CPU on `mariadbd`, slow queries, temp
+tables alerts, housekeeper backlog), you SHOULD call `diag.mysql_config`,
+`diag.mysql_stats`, and `diag.mysql_tables` together — not just
+`diag.mysql_status`. Without `mysql_config` you can't see `innodb_buffer
+_pool_size`; without `mysql_stats` you can't compute the hit ratio;
+without `mysql_tables` you can't see `ibdata1` bloat. All three are
+typically needed to recommend a concrete tuning change.
+
+**Disk-fill investigations.** When `diag.disk_usage` shows a folder is
+nearly full, follow up with `diag.disk_largest_files` to find the
+*specific files* eating the space (e.g. uncompressed rotated logs,
+oversized binlogs, runaway log files). Folder-level totals hide single
+huge offenders. If config tuning is suspected, use `diag.read_config`
+to inspect the relevant config file (e.g.
+`/etc/logrotate.d/syslog` for log compression, `/etc/my.cnf.d/server.cnf`
+for MariaDB).
+
 Rules:
 - All your tools are read-only. You cannot delete, restart, or change anything.
 - You never get a shell. Diagnostics run only through the fixed `diag.*` allowlist.
