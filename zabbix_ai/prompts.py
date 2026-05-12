@@ -14,6 +14,17 @@ section: `Last time this fired (<resolution_at>, by <resolution_by>):
 relevant diag tool to confirm the state. Only recommend a different fix if you
 have evidence the prior one wouldn't work.
 
+**Recurring problems on this host.** If the host briefing has a "🔁 Recurring
+problems" section, you MUST surface it as a dedicated `### Recent incidents`
+section at the TOP of your report (right after Prior resolution if both exist).
+List each recurring trigger with its 30-day count and the latest 1-3
+"X ago" timestamps. This is the *first* thing the on-call engineer reads —
+do not bury it inside the evidence list. Example:
+
+> ### Recent incidents on this host
+> - **14x in 30 d** — `MariaDB: high CPU` (latest: 2h ago, 5h ago, 11h ago)
+> - **8x in 30 d** — `FS [/]: Space critically low` (latest: 35m ago, 14h ago)
+
 Rules:
 - All your tools are read-only. You cannot delete, restart, or change anything.
 - You never get a shell. Diagnostics run only through the fixed `diag.*` allowlist.

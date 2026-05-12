@@ -294,22 +294,18 @@ def build_router(settings: Settings) -> APIRouter:
                 hostname = ctx.hostname or ""
 
                 # Write summary back to Zabbix as an event.acknowledge
-                # comment (action=4 = "add message").
+                # comment via the shared helper (same logic used by the
+                # manual right-click adapter).
                 if instance and instance in runner._zabbix_clients and eventid:
-                    client = runner._zabbix_clients[instance]
-                    ack_message = _format_ack_message(result.summary)
-                    try:
-                        await client.call("event.acknowledge", {
-                            "eventids": [str(eventid)],
-                            "action": 4,
-                            "message": ack_message,
-                        })
-                    except Exception as e:
-                        _log.warning(
-                            "event.acknowledge writeback failed for "
-                            "inv %s eventid %s: %s",
-                            result.investigation_id, eventid, e,
-                        )
+                    from zabbix_ai.services.zabbix_writeback import (
+                        post_summary_to_event,
+                    )
+                    await post_summary_to_event(
+                        runner._zabbix_clients[instance],
+                        eventid=eventid,
+                        summary=result.summary,
+                        source="auto",
+                    )
         except BudgetExceededError as e:
             _log.info("auto-investigate paused by budget gate: %s", e)
             return JSONResponse({"status": "paused_budget",
@@ -360,15 +356,6 @@ def build_router(settings: Settings) -> APIRouter:
 
 
 def _format_ack_message(summary: str) -> str:
-    """Render the event.acknowledge message body.
-
-    Zabbix event ack messages are capped at 2048 chars in the default
-    schema. Long Claude summaries get truncated with a marker so the
-    triager knows there's more on the admin page.
-    """
-    prefix = "[zabbix-rca-AI auto-investigation]\n"
-    body = summary or "(no summary produced)"
-    limit = 2000
-    if len(body) > limit:
-        body = body[: limit - 1] + "…"
-    return prefix + body
+    """Backwards-compatible shim — delegates to the shared helper."""
+    from zabbix_ai.services.zabbix_writeback import format_ack_message
+    return format_ack_message(summary, source="auto")

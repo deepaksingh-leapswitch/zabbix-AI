@@ -402,19 +402,43 @@ def _render_open_problems(problems: list[dict]) -> str:
 
 
 def _render_history(events: list[dict], open_names: set[str]) -> str:
-    counts: dict[str, int] = {}
+    # Group resolved events by trigger name. For each top trigger we also keep
+    # the latest 3 clock timestamps so the AI can cite concrete "fired Xh ago,
+    # before that Yd ago" recurrences rather than a single rolled-up count.
+    by_name: dict[str, list[int]] = {}
     for ev in events:
         n = ev.get("name") or ""
-        if n not in open_names:
-            counts[n] = counts.get(n, 0) + 1
-    if not counts:
+        if n in open_names:
+            continue
+        try:
+            clock = int(ev.get("clock", 0))
+        except (TypeError, ValueError):
+            clock = 0
+        by_name.setdefault(n, []).append(clock)
+    if not by_name:
         return ""
-    top10 = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:10]
-    lines = ["**30-day problem history** (excluding open)", ""]
-    lines.append("| Occurrences | Trigger |")
-    lines.append("|-------------|---------|")
-    for name, cnt in top10:
-        lines.append(f"| {cnt} | {name[:80]} |")
+    top10 = sorted(by_name.items(), key=lambda kv: len(kv[1]), reverse=True)[:10]
+    repeat = [(name, clocks) for name, clocks in top10 if len(clocks) >= 3]
+
+    lines: list[str] = []
+    if repeat:
+        lines.append("**🔁 Recurring problems on this host (READ FIRST — "
+                     "surface these in your report)**")
+        lines.append("")
+        for name, clocks in repeat:
+            recent = sorted(clocks, reverse=True)[:3]
+            ages = ", ".join(_age_str(c) + " ago" for c in recent)
+            lines.append(f"- **{len(clocks)}x in 30 d** - `{name[:90]}` "
+                         f"(latest: {ages})")
+        lines.append("")
+
+    lines.append("**30-day problem history** (excluding still-open)")
+    lines.append("")
+    lines.append("| Occurrences | Last fired | Trigger |")
+    lines.append("|-------------|------------|---------|")
+    for name, clocks in top10:
+        latest = _age_str(max(clocks)) if clocks else "?"
+        lines.append(f"| {len(clocks)} | {latest} ago | {name[:80]} |")
     return "\n".join(lines)
 
 

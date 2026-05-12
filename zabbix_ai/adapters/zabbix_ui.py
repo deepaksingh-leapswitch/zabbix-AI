@@ -88,9 +88,30 @@ def build_router(settings: Settings) -> APIRouter:
                     eventid=int(eventid) if eventid is not None else None,
                     hostid=int(hostid) if hostid is not None else None,
                 )
+                final_summary = ""
                 async for ev in runner.investigate_streaming(ctx):
+                    if ev.get("event") == "final":
+                        data = ev.get("data") or {}
+                        final_summary = (data.get("summary")
+                                          or data.get("text")
+                                          or "")
                     yield {"event": ev["event"],
                            "data": json.dumps(ev["data"], default=str)}
+
+                # After the SSE stream completes, post the summary back
+                # to the Zabbix event as a comment so the right-click
+                # flow also leaves a paper trail in the Zabbix UI.
+                if eventid is not None and final_summary:
+                    zclients = getattr(runner, "_zabbix_clients", {}) or {}
+                    zc = zclients.get(instance)
+                    if zc is not None:
+                        from zabbix_ai.services.zabbix_writeback import (
+                            post_summary_to_event,
+                        )
+                        await post_summary_to_event(
+                            zc, eventid=eventid,
+                            summary=final_summary, source="manual",
+                        )
 
         return EventSourceResponse(event_gen())
 

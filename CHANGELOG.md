@@ -2,6 +2,27 @@
 
 All notable releases. Format follows [keepachangelog.com](https://keepachangelog.com/).
 
+## v1.5.1 — 2026-05-12
+
+Two fixes driven by inv #14 (Zabbix server itself):
+
+1. **Recurring problems get top-billing in the briefing + report.** The
+   30-day past-events list was already in the briefing but only as a
+   rolled-up count buried in evidence. Now any trigger that fired 3+
+   times in 30 days lands in a dedicated "🔁 Recurring problems"
+   section with the latest 3 occurrence timestamps. The system prompt
+   explicitly requires the AI to surface these as a "Recent incidents"
+   section at the *top* of its report. The on-call engineer no longer
+   has to dig.
+
+2. **Manual right-click investigations now write back to the Zabbix
+   problem.** Auto-investigate (v1.5.0) already wrote summaries back
+   as `event.acknowledge` comments; the manual right-click flow
+   didn't, leaving operators with no trail in the Zabbix UI. Extracted
+   the write-back into `services/zabbix_writeback.py` and wired it
+   into both paths. Source tag distinguishes `[zabbix-rca-AI manual]`
+   vs `[zabbix-rca-AI auto-investigation]` in the comment prefix.
+
 ## v1.5.0 — 2026-05-11
 
 **Trust-loop release — cuts L1/L2 time on routine alerts.**
