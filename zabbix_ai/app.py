@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -7,6 +8,8 @@ from fastapi import FastAPI
 
 from zabbix_ai import __version__
 from zabbix_ai.config import Settings, load_settings
+
+_log = logging.getLogger(__name__)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -30,30 +33,67 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 from zabbix_ai.admin import setup_admin
                 await setup_admin(app, settings, mem)
 
-            # v1.5 background workers — best-effort, never break startup.
-            try:
+            # v1.5 background workers — best-effort (never break startup),
+            # but log failures and record health on app.state for /admin/status.
+            # Build Zabbix clients once so the pollers actually have
+            # clients. Previously app.state.zabbix_clients was never set,
+            # so resolution_poller / outcome_inference ran as no-ops.
+            from zabbix_ai.clients.zabbix import ZabbixClient
+            _zclients = {}
+            for _inst in settings.zabbix_instances:
+                try:
+                    _zclients[_inst.name] = ZabbixClient(
+                        _inst.name, str(_inst.url),
+                        _inst.token.get_secret_value(), memory=mem)
+                except Exception:
+                    _log.exception("failed to build zabbix client %s", _inst.name)
+            app.state.zabbix_clients = _zclients
+
+            app.state.worker_health = {}
+
+            def _start_worker(name, thunk):
+                try:
+                    thunk()
+                    app.state.worker_health[name] = {"started": True, "error": None}
+                except Exception as e:  # noqa: BLE001
+                    _log.exception("background worker %s failed to start", name)
+                    app.state.worker_health[name] = {"started": False, "error": str(e)}
+
+            def _start_resolution():
                 from zabbix_ai.services.resolution_notes import (
                     start_resolution_poller,
                 )
-                start_resolution_poller(app, settings, mem,
-                                         getattr(app.state, "zabbix_clients", {}))
-            except Exception:
-                pass
-            try:
+                start_resolution_poller(
+                    app, settings, mem, getattr(app.state, "zabbix_clients", {}))
+            _start_worker("resolution_poller", _start_resolution)
+
+            def _start_outcome():
                 from zabbix_ai.services.outcome_inference import (
                     start_outcome_inference,
                 )
-                start_outcome_inference(app, settings, mem,
-                                         getattr(app.state, "zabbix_clients", {}))
-            except Exception:
-                pass
-            try:
-                from zabbix_ai.services.hostbill_link import (
-                    start_hostbill_sync,
-                )
+                # Signature differs from the other workers: (memory, settings,
+                # *, clients). It returns the task — stash it so it isn't GC'd.
+                app.state.outcome_inference_task = start_outcome_inference(
+                    mem, settings,
+                    clients=getattr(app.state, "zabbix_clients", {}))
+            _start_worker("outcome_inference", _start_outcome)
+
+            def _start_hbsync():
+                from zabbix_ai.services.hostbill_link import start_hostbill_sync
                 start_hostbill_sync(app, settings, mem)
-            except Exception:
-                pass
+            _start_worker("hostbill_sync", _start_hbsync)
+
+            if settings.ticket_flow is not None and settings.ticket_flow.enabled:
+                def _start_followup():
+                    from zabbix_ai.services.followup_worker import (
+                        start_followup_worker,
+                    )
+                    start_followup_worker(app, settings, mem)
+                _start_worker("followup_worker", _start_followup)
+            else:
+                app.state.worker_health["followup_worker"] = {
+                    "started": False, "error": None,
+                    "skipped": "ticket_flow disabled"}
 
             yield
         finally:
@@ -74,6 +114,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings is not None and settings.slack is not None:
         from zabbix_ai.adapters.slack import build_router
         app.include_router(build_router(settings))
+
+        # Slack interactive components (ticket-flow approve/discard buttons).
+        from zabbix_ai.adapters.slack_interactions import (
+            build_router as build_interactions_router,
+        )
+        app.include_router(build_interactions_router(settings))
 
     if settings is not None and settings.zabbix_ui is not None:
         from zabbix_ai.adapters.zabbix_ui import build_router as build_ui_router

@@ -36,10 +36,20 @@ def _real_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
+async def _resolve_og(request: Request):
+    """Effective Google OAuth config: DB overlay (admin UI) wins, else static."""
+    from zabbix_ai.admin.config_overlay import resolve_oauth_google
+    return await resolve_oauth_google(
+        getattr(request.app.state, "memory", None),
+        getattr(request.app.state, "crypto_key", None),
+        getattr(request.app.state.settings, "oauth_google", None),
+    )
+
+
 @router.get("/admin/oauth/google/start")
 async def start(request: Request) -> RedirectResponse:
-    settings = request.app.state.settings
-    if settings.oauth_google is None:
+    og = await _resolve_og(request)
+    if og is None:
         raise HTTPException(status_code=503, detail="Google SSO not configured")
     state = secrets.token_urlsafe(24)
     nonce = secrets.token_urlsafe(24)
@@ -47,7 +57,7 @@ async def start(request: Request) -> RedirectResponse:
     cookie = auth._serializer(secret).dumps({"state": state, "nonce": nonce})
     redirect_uri = str(request.url_for("oauth_google_callback"))
     params = {
-        "client_id": settings.oauth_google.client_id,
+        "client_id": og.client_id,
         "response_type": "code",
         "scope": "openid email profile",
         "redirect_uri": redirect_uri,
@@ -55,8 +65,8 @@ async def start(request: Request) -> RedirectResponse:
         "nonce": nonce,
         "prompt": "select_account",
     }
-    if settings.oauth_google.allowed_email_domain:
-        params["hd"] = settings.oauth_google.allowed_email_domain
+    if og.allowed_email_domain:
+        params["hd"] = og.allowed_email_domain
     resp = RedirectResponse(
         url=f"{_GOOGLE_AUTH}?{urlencode(params)}",
         status_code=303,
@@ -73,9 +83,9 @@ async def start(request: Request) -> RedirectResponse:
 @limiter.limit("30/minute")
 async def callback(request: Request, code: str = "",
                    state: str = "") -> RedirectResponse:
-    settings = request.app.state.settings
     ip = _real_ip(request)
-    if settings.oauth_google is None:
+    og = await _resolve_og(request)
+    if og is None:
         raise HTTPException(status_code=503, detail="Google SSO not configured")
     secret = request.app.state.session_secret
     raw = request.cookies.get("zai_oauth_pkce")
@@ -92,8 +102,8 @@ async def callback(request: Request, code: str = "",
     async with httpx.AsyncClient(timeout=15) as h:
         token_resp = await h.post(_GOOGLE_TOKEN, data={
             "code": code,
-            "client_id": settings.oauth_google.client_id,
-            "client_secret": settings.oauth_google.client_secret.get_secret_value(),
+            "client_id": og.client_id,
+            "client_secret": og.client_secret.get_secret_value(),
             "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
         })
@@ -124,14 +134,14 @@ async def callback(request: Request, code: str = "",
     if claims.get("nonce") != stash.get("nonce"):
         raise HTTPException(status_code=400, detail="nonce mismatch")
     aud = claims.get("aud")
-    if aud != settings.oauth_google.client_id:
+    if aud != og.client_id:
         raise HTTPException(status_code=400, detail="audience mismatch")
 
     email = claims.get("email", "")
     if not email or not claims.get("email_verified"):
         raise HTTPException(status_code=400, detail="email not verified")
-    if settings.oauth_google.allowed_email_domain:
-        domain = settings.oauth_google.allowed_email_domain.lower()
+    if og.allowed_email_domain:
+        domain = og.allowed_email_domain.lower()
         if not email.lower().endswith("@" + domain):
             raise HTTPException(
                 status_code=403,
@@ -145,7 +155,7 @@ async def callback(request: Request, code: str = "",
         # Auto-provision on first SSO sign-in
         user = await users.create_oauth_user(
             memory, username=email, provider="google", subject=sub,
-            role=settings.oauth_google.default_role,
+            role=og.default_role,
         )
     if user.get("disabled"):
         raise HTTPException(status_code=403, detail="user disabled")

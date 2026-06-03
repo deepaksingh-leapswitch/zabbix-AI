@@ -224,139 +224,207 @@ def build_router(settings: Settings) -> APIRouter:
         # lazily so this adapter still loads cleanly if budget.py is
         # missing on an older branch — in that case we proceed without
         # any budget gating.
-        model = settings.default_model
-        try:
-            from zabbix_ai.services.budget import enforce_budget
-        except ImportError:
-            enforce_budget = None  # type: ignore[assignment]
-
-        memory_handle = getattr(request.app.state, "memory", None)
-        if enforce_budget is not None:
+        async def _process() -> JSONResponse:
+            model = settings.default_model
             try:
-                # The budget service returns (effective_model, reason);
-                # effective_model=None means 'paused'. We don't have an
-                # investigation_id yet (runner hasn't started), so pass
-                # None — budget.py will still write the audit row.
-                chosen, reason = await enforce_budget(
-                    memory_handle, settings,
-                    model_requested=settings.default_model,
-                )
-            except Exception as e:
-                _log.warning("enforce_budget failed: %s — proceeding", e)
-                chosen, reason = settings.default_model, "error"
-            if chosen is None:
-                # budget.py already wrote 'paused' to budget_audit; we add
-                # a defensive secondary row only if that call somehow
-                # raised before reaching its own _audit() call.
-                return JSONResponse({"status": "paused_budget",
-                                     "reason": reason})
-            if chosen != settings.default_model:
-                model = chosen
+                from zabbix_ai.services.budget import enforce_budget
+            except ImportError:
+                enforce_budget = None  # type: ignore[assignment]
 
-        # ── Run the investigation ────────────────────────────────────────
-        # We import BudgetExceededError lazily for the same reason as
-        # enforce_budget — to keep this module importable on older branches
-        # that don't have the budget service yet.
-        try:
-            from zabbix_ai.services.budget import BudgetExceededError
-        except ImportError:
-            class BudgetExceededError(Exception):  # type: ignore[no-redef]
-                """Stub when the budget service isn't installed."""
-
-        hostname = ""
-        result = None
-        try:
-            async with InvestigationRunner(settings) as runner:
-                # Honour the budget-chosen model for *this* run only by
-                # mutating the orchestrator on the runner directly. The
-                # orchestrator will *also* re-check the budget but that's
-                # idempotent and the second call simply confirms.
-                if model != settings.default_model and runner._orch is not None:
-                    runner._orch.model = model
-                ctx = InvestigationContext(
-                    source="auto_webhook",
-                    instance=instance or None,
-                    eventid=eventid,
-                    hostid=hostid,
-                    trigger_source="webhook",
-                )
-                result = await runner.investigate(ctx)
-                # Mark the row as webhook-triggered. Migration 007 added
-                # the column with default 'manual', so we override here.
-                if runner._mem is not None:
-                    with contextlib.suppress(Exception):
-                        await runner._mem.execute(
-                            "UPDATE investigations SET trigger_source=? WHERE id=?",
-                            ("webhook", result.investigation_id),
-                        )
-
-                # Resolve the hostname for the Slack title (best-effort).
-                hostname = ctx.hostname or ""
-
-                # Write summary back to Zabbix as a comment. Prefer the
-                # specific eventid (auto-webhook usually has one); fall
-                # back to host-mode (top-3 open problems) if not.
-                if instance and instance in runner._zabbix_clients:
-                    from zabbix_ai.services.zabbix_writeback import (
-                        post_summary_to_event,
-                        post_summary_to_host_open_problems,
+            memory_handle = getattr(request.app.state, "memory", None)
+            if enforce_budget is not None:
+                try:
+                    # The budget service returns (effective_model, reason);
+                    # effective_model=None means 'paused'. We don't have an
+                    # investigation_id yet (runner hasn't started), so pass
+                    # None — budget.py will still write the audit row.
+                    chosen, reason = await enforce_budget(
+                        memory_handle, settings,
+                        model_requested=settings.default_model,
                     )
-                    zc = runner._zabbix_clients[instance]
-                    if eventid:
-                        await post_summary_to_event(
-                            zc, eventid=eventid,
-                            summary=result.summary, source="auto",
-                        )
-                    elif hostid:
-                        await post_summary_to_host_open_problems(
-                            zc, hostid=hostid,
-                            summary=result.summary, source="auto",
-                        )
-        except BudgetExceededError as e:
-            _log.info("auto-investigate paused by budget gate: %s", e)
-            return JSONResponse({"status": "paused_budget",
-                                 "reason": str(e)})
-        except Exception as e:
-            _log.exception("auto-investigate failed")
-            return JSONResponse(
-                status_code=500,
-                content={"status": "error", "message": str(e)},
-            )
-        if result is None:  # defensive — should never trigger
-            return JSONResponse(
-                status_code=500,
-                content={"status": "error",
-                         "message": "investigation returned no result"},
-            )
+                except Exception as e:
+                    _log.warning("enforce_budget failed: %s — proceeding", e)
+                    chosen, reason = settings.default_model, "error"
+                if chosen is None:
+                    # budget.py already wrote 'paused' to budget_audit; we add
+                    # a defensive secondary row only if that call somehow
+                    # raised before reaching its own _audit() call.
+                    return JSONResponse({"status": "paused_budget",
+                                         "reason": reason})
+                if chosen != settings.default_model:
+                    model = chosen
 
-        # ── Slack notification (optional) ────────────────────────────────
-        # We post AFTER the InvestigationRunner context exits, so the
-        # Slack client uses its own short-lived httpx connection — this
-        # keeps the runner's lifecycle clean even when Slack is slow.
-        if ai_cfg.slack_channel and settings.slack is not None:
-            slack = SlackClient(
-                bot_token=settings.slack.bot_token.get_secret_value(),
-            )
+            # ── Run the investigation ────────────────────────────────────────
+            # We import BudgetExceededError lazily for the same reason as
+            # enforce_budget — to keep this module importable on older branches
+            # that don't have the budget service yet.
             try:
-                await slack.post_message(
-                    channel=ai_cfg.slack_channel,
-                    text=f"AI auto-investigation: {hostname or 'unknown host'}",
-                    blocks=_slack_blocks(
-                        hostname=hostname,
-                        summary=result.summary,
-                        investigation_id=result.investigation_id,
-                        eventid=eventid,
-                    ),
-                )
-            except Exception as e:
-                _log.warning("Slack auto-investigate post failed: %s", e)
-            finally:
-                await slack.aclose()
+                from zabbix_ai.services.budget import BudgetExceededError
+            except ImportError:
+                class BudgetExceededError(Exception):  # type: ignore[no-redef]
+                    """Stub when the budget service isn't installed."""
 
-        return JSONResponse({
-            "status": "completed",
-            "investigation_id": result.investigation_id,
-        })
+            hostname = ""
+            result = None
+            try:
+                async with InvestigationRunner(settings) as runner:
+                    # Honour the budget-chosen model for *this* run only by
+                    # mutating the orchestrator on the runner directly. The
+                    # orchestrator will *also* re-check the budget but that's
+                    # idempotent and the second call simply confirms.
+                    if model != settings.default_model:
+                        runner.set_model(model)
+                    ctx = InvestigationContext(
+                        source="auto_webhook",
+                        instance=instance or None,
+                        eventid=eventid,
+                        hostid=hostid,
+                        trigger_source="webhook",
+                    )
+                    result = await runner.investigate(ctx)
+                    # Mark the row as webhook-triggered. Migration 007 added
+                    # the column with default 'manual', so we override here.
+                    if runner.memory is not None:
+                        with contextlib.suppress(Exception):
+                            await runner.memory.execute(
+                                "UPDATE investigations SET trigger_source=? WHERE id=?",
+                                ("webhook", result.investigation_id),
+                            )
+
+                    # Resolve the hostname for the Slack title (best-effort).
+                    hostname = ctx.hostname or ""
+
+                    # Write summary back to Zabbix as a comment. Prefer the
+                    # specific eventid (auto-webhook usually has one); fall
+                    # back to host-mode (top-3 open problems) if not.
+                    if instance and runner.has_client(instance):
+                        from zabbix_ai.services.zabbix_writeback import (
+                            post_summary_to_event,
+                            post_summary_to_host_open_problems,
+                        )
+                        zc = runner.client(instance)
+                        if eventid:
+                            await post_summary_to_event(
+                                zc, eventid=eventid,
+                                summary=result.summary, source="auto",
+                            )
+                        elif hostid:
+                            await post_summary_to_host_open_problems(
+                                zc, hostid=hostid,
+                                summary=result.summary, source="auto",
+                            )
+            except BudgetExceededError as e:
+                _log.info("auto-investigate paused by budget gate: %s", e)
+                return JSONResponse({"status": "paused_budget",
+                                     "reason": str(e)})
+            except Exception as e:
+                _log.exception("auto-investigate failed")
+                return JSONResponse(
+                    status_code=500,
+                    content={"status": "error", "message": str(e)},
+                )
+            if result is None:  # defensive — should never trigger
+                return JSONResponse(
+                    status_code=500,
+                    content={"status": "error",
+                             "message": "investigation returned no result"},
+                )
+
+            # ── Ticket-flow draft path (migration 008) ───────────────────────
+            # When ticket_flow is enabled and the problem is severe enough,
+            # post an AI-drafted ticket to Slack with Approve/Discard buttons
+            # instead of the one-shot summary. The ticket is created only on
+            # approval (see adapters/slack_interactions.py).
+            tf = settings.ticket_flow
+            _draft = (tf is not None and tf.enabled and settings.slack is not None
+                      and memory_handle is not None
+                      and severity >= tf.ticket_min_severity)
+            if _draft:
+                from zabbix_ai.services import ticket_flow as _tf
+                # Scope filter: only draft a ticket for in-scope problem names
+                # (e.g. ICMP first, disk later). Non-matching problems fall
+                # through to the normal one-shot summary below.
+                _draft = _tf.matches_trigger_patterns(
+                    tf, getattr(ctx, "problem_name", "") or "")
+            if _draft:
+                from zabbix_ai.services import ticket_flow as _tf
+                link = getattr(ctx, "hostbill_link", None)
+                kind, client_id, _dept = _tf.resolve_ticket_target(tf, link)
+                channel = tf.test_slack_channel if tf.dry_run else ai_cfg.slack_channel
+                try:
+                    incident_id = await _tf.create_incident(
+                        memory_handle, instance=instance, eventid=eventid,
+                        hostid=hostid, hostname=hostname, severity=severity,
+                        trigger_name=getattr(ctx, "problem_name", "") or "",
+                        problem_type="other",
+                        investigation_id=result.investigation_id,
+                        ticket_kind=kind, hostbill_client_id=client_id,
+                        slack_channel=channel,
+                    )
+                    if channel:
+                        slack = SlackClient(
+                            bot_token=settings.slack.bot_token.get_secret_value())
+                        try:
+                            resp = await _tf.post_draft(
+                                slack, channel=channel, incident_id=incident_id,
+                                hostname=hostname, summary=result.summary,
+                                ticket_kind=kind, eventid=eventid)
+                            thread_ts = resp.get("ts") if isinstance(resp, dict) else None
+                            if thread_ts:
+                                await _tf.update_incident(
+                                    memory_handle, incident_id,
+                                    slack_thread_ts=thread_ts)
+                        finally:
+                            await slack.aclose()
+                except Exception as e:
+                    _log.exception("ticket-flow draft failed")
+                    return JSONResponse(
+                        status_code=500,
+                        content={"status": "error",
+                                 "message": f"ticket-flow draft: {e}"})
+                return JSONResponse({"status": "drafted",
+                                     "incident_id": incident_id,
+                                     "investigation_id": result.investigation_id,
+                                     "ticket_kind": kind, "dry_run": tf.dry_run})
+
+            # ── Slack notification (optional) ────────────────────────────────
+            # We post AFTER the InvestigationRunner context exits, so the
+            # Slack client uses its own short-lived httpx connection — this
+            # keeps the runner's lifecycle clean even when Slack is slow.
+            if ai_cfg.slack_channel and settings.slack is not None:
+                slack = SlackClient(
+                    bot_token=settings.slack.bot_token.get_secret_value(),
+                )
+                try:
+                    await slack.post_message(
+                        channel=ai_cfg.slack_channel,
+                        text=f"AI auto-investigation: {hostname or 'unknown host'}",
+                        blocks=_slack_blocks(
+                            hostname=hostname,
+                            summary=result.summary,
+                            investigation_id=result.investigation_id,
+                            eventid=eventid,
+                        ),
+                    )
+                except Exception as e:
+                    _log.warning("Slack auto-investigate post failed: %s", e)
+                finally:
+                    await slack.aclose()
+
+            return JSONResponse({
+                "status": "completed",
+                "investigation_id": result.investigation_id,
+            })
+
+        if getattr(ai_cfg, "async_processing", True):
+            # Off the request path: return 202 immediately so a slow
+            # investigation can't time out the Zabbix action or block.
+            _spawn_bg(request, _process())
+            return JSONResponse(
+                status_code=202,
+                content={"status": "accepted",
+                         "instance": instance, "eventid": eventid})
+        return await _process()
 
     return router
 
@@ -365,3 +433,23 @@ def _format_ack_message(summary: str) -> str:
     """Backwards-compatible shim — delegates to the shared helper."""
     from zabbix_ai.services.zabbix_writeback import format_ack_message
     return format_ack_message(summary, source="auto")
+
+
+def _spawn_bg(request, coro) -> None:
+    """Run an investigation coroutine off the request path; track it so the
+    event loop doesn't garbage-collect the task mid-run."""
+    import asyncio
+    task = asyncio.ensure_future(_bg(coro))
+    bag = getattr(request.app.state, "_bg_investigations", None)
+    if bag is None:
+        bag = set()
+        request.app.state._bg_investigations = bag
+    bag.add(task)
+    task.add_done_callback(bag.discard)
+
+
+async def _bg(coro) -> None:
+    try:
+        await coro
+    except Exception:
+        _log.exception("async auto-investigate failed")

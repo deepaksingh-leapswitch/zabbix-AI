@@ -48,6 +48,14 @@ class Memory:
         await self._conn.execute(sql, params)
         await self._conn.commit()
 
+    async def execute_write(self, sql: str, params: tuple = ()) -> int:
+        """Like execute() but returns affected row count — used for guarded
+        state transitions: UPDATE ... WHERE id=? AND state=?."""
+        assert self._conn
+        cur = await self._conn.execute(sql, params)
+        await self._conn.commit()
+        return cur.rowcount
+
     async def fetchall(self, sql: str, params: tuple = ()) -> list[tuple]:
         assert self._conn
         async with self._conn.execute(sql, params) as cur:

@@ -198,6 +198,7 @@ async def _gather_status(request: Request) -> dict[str, Any]:
         "investigations": {"total": inv_total, "running": inv_running},
         "tables": table_counts,
         "background_tasks": bg_tasks,
+        "workers": getattr(request.app.state, "worker_health", {}),
     }
 
 

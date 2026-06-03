@@ -107,8 +107,9 @@ def register_admin_components(app: FastAPI, settings: Settings) -> None:
     app.include_router(hostbill_links.router)
     if settings.zabbix_ui is not None:
         app.include_router(zabbix_link.router)
-    if settings.oauth_google is not None:
-        app.include_router(oauth_google.router)
+    # Always mount: handlers resolve OAuth config from the DB overlay
+    # (admin UI) or static config at request time, 503 if unconfigured.
+    app.include_router(oauth_google.router)
 
 
 async def setup_admin(app: FastAPI, settings: Settings,
@@ -180,6 +181,20 @@ async def setup_admin(app: FastAPI, settings: Settings,
         app.state.crypto_key = derive_key(secrets_key)
     else:
         app.state.crypto_key = b"\x00" * 32
+
+    # Apply the DB connection overlay once at startup so app.state.settings
+    # (and the shared settings object used by the pollers, webhook, and
+    # client-building) reflects UI-configured connections — one effective
+    # config for the whole process, matching what investigations already use
+    # per-run. Same key source as investigation_runner; overlay_settings only
+    # replaces sub-settings when DB rows exist, so file config is the fallback.
+    try:
+        from zabbix_ai.admin.config_overlay import overlay_settings
+        await overlay_settings(settings, memory, app.state.crypto_key)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "startup config overlay failed; using file config")
+    app.state.settings = settings
 
     # #21: Background task to warn about retained BOOTSTRAP_ADMIN_PASSWORD.
     # Stash the task on app.state so it isn't garbage-collected mid-loop.

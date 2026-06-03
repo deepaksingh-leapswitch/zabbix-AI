@@ -190,3 +190,67 @@ pytest -v
 - v1.4.0 — Admin: user management UI, cost dashboard, system status page. Tools: diag.network, diag.cert_expiry, diag.smart. Agent-side install guide ✓
 - v1.4.{1,2,3,4,5} — diag.disk_usage iterations + diag.windows_winsxs (Windows space consumers) ✓
 - v1.5.0 — Trust loop: auto-investigate-on-alert webhook, resolution-notes feed-forward, daily ₹ budget cap, outcome inference, HostBill linkage foundation ✓
+
+## Auto ticket + Slack follow-up flow (ticket-flow, optional)
+
+Automates the NOC's manual loop: raise a HostBill ticket, post to Slack, and
+chase follow-ups. Disabled by default; builds on the auto-investigate webhook.
+
+**Lifecycle**
+
+1. A qualifying Zabbix problem (severity ≥ `ticket_min_severity`) is
+   auto-investigated as usual.
+2. Instead of a one-shot summary, the bot posts an **AI-drafted ticket** to the
+   auto-investigate Slack channel with **Approve / Discard** buttons. No ticket
+   exists yet.
+3. On **Approve**, a HostBill ticket is created — a *customer* ticket if the host
+   is confidently linked to a HostBill client (`host_hostbill_link`), otherwise
+   an *internal* ticket to `internal_department_id`.
+4. A background loop posts **escalating reminders** in the Slack thread
+   (`nudge_schedule_minutes`) until one of:
+   - a human **replies on the ticket** → hand off to the NOC, stop nudging;
+   - the **Zabbix problem recovers** → post "resolved" and close the ticket;
+   - **3 days** with no reply → go quiet (ticket stays open);
+   - **6 days** still active → post an approval-gated prompt to **disable
+     monitoring** in Zabbix (ICMP-only host → disable the host; agent trigger →
+     disable that trigger; otherwise a maintenance window). Requires a Zabbix
+     write token; without one the bot only posts an alert.
+
+**Setup**
+
+1. Give the HostBill API user ticket-write perms (`addTicket`, `addTicketReply`,
+   `setTicketStatus`) on top of the read perms.
+2. In the Slack app, set **Interactivity → Request URL** to
+   `https://<your-host>/slack/interactions`.
+3. (For the 6-day disable) create a write-role Zabbix token and set
+   `write_token_env` on the instance + export that env var.
+4. Add the `ticket_flow:` block to `/etc/zabbix-ai/config.yaml`
+   (see `config.example.yaml`). **Start with `dry_run: true`** and a
+   `test_slack_channel` to validate the flow end-to-end, then flip to live.
+5. Restart: `systemctl restart zabbix-ai`.
+
+State for each problem lives in the `incidents` table (migration 008); every
+ticket create and Zabbix write is recorded in `audit_log`.
+
+## Operational constraints (run a single instance)
+
+This service is designed to run as **one process on one node**, and that assumption
+is currently load-bearing:
+
+- **Background workers are per-process singletons** with no leader election —
+  `resolution_poller`, `outcome_inference`, `hostbill_sync`, and (when ticket-flow
+  is enabled) `followup_worker` all start unconditionally in `lifespan`. Running two
+  instances would **double-run** them and duplicate their side effects (Slack nudges,
+  Zabbix write-backs, ticket follow-ups).
+- **The auto-investigate webhook has side effects** (writes back to Zabbix, posts to
+  Slack, may create incidents). Two instances behind a load balancer could process the
+  same event twice. (The `incidents` table is unique on `(instance, eventid)`, which
+  prevents duplicate *tickets*, but not duplicate investigations/Slack posts.)
+- **State is SQLite** (`sqlite_path`), single-writer — it cannot be shared across nodes.
+
+**If you ever need HA / horizontal scale:** move state to Postgres and run the workers
+as a single leader-elected (or externally-queued) process separate from the web tier.
+Until then, keep it to one `zabbix-ai` instance.
+
+Worker startup health is visible at `/admin/status` (the `workers` field) — a worker that
+fails to start is logged and recorded there rather than silently swallowed.

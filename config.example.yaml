@@ -54,3 +54,48 @@ admin:
 #   client_secret_env: GOOGLE_OAUTH_CLIENT_SECRET
 #   allowed_email_domain: leapswitch.com
 #   default_role: operator
+
+# ── Auto ticket + Slack follow-up flow (ticket-flow) ─────────────────────────
+# Disabled by default. Builds on auto_investigate: a qualifying problem is
+# investigated, then an AI-drafted HostBill ticket is posted to Slack with
+# Approve/Discard buttons. On approval the ticket is created; an escalating
+# follow-up loop then chases it until a reply, recovery, or the disable backstop.
+#
+# Prerequisites:
+#   * auto_investigate enabled (this flow reuses its webhook + slack_channel).
+#   * HostBill API user with ticket WRITE perms (addTicket, addTicketReply,
+#     setTicketStatus) in addition to the read perms used for lookup.
+#   * Slack app: set Interactivity Request URL to
+#       https://<your-host>/slack/interactions
+#     (the bot already needs chat:write).
+#   * For the 6-day disable: a separate Zabbix WRITE-role token per instance,
+#     referenced by zabbix_instances[].write_token_env (see below). Without it
+#     the 6-day step only posts an alert and never writes to Zabbix.
+#
+# ticket_flow:
+#   enabled: true
+#   ticket_min_severity: 4            # 0..5; 4 = High, 5 = Disaster
+#   # Roll out by problem type. Start with ICMP-unavailable only; add the
+#   # disk patterns (commented) when you're ready for the next category.
+#   trigger_name_patterns:
+#     - 'unavailable by icmp'
+#     - 'icmp ping'
+#     # - 'disk space'
+#     # - 'filesystem.*(low|full)'
+#     # - 'space is low'
+#   internal_department_id: 2         # HostBill dept for internal/infra tickets
+#   internal_client_id:               # optional client id for internal tickets
+#   nudge_schedule_minutes: [15, 30, 60, 60]   # escalating; last value repeats
+#   quiet_after_days: 3               # stop nudging after N days w/o a reply
+#   disable_after_days: 6             # offer monitoring-disable after N days
+#   approver_slack_user_ids: []       # empty => anyone in the channel may approve
+#   dry_run: true                     # drafts to test_slack_channel, no real
+#                                     # ticket / no Zabbix write — use for rollout
+#   test_slack_channel: C_TESTID      # used only when dry_run is true
+
+# To enable the 6-day monitoring-disable, give each instance a write token, e.g.:
+#   zabbix_instances:
+#     - name: monitoring
+#       url: https://zabbix.example/api_jsonrpc.php
+#       token_env: ZABBIX_TOKEN_MONITORING        # read-only role
+#       write_token_env: ZABBIX_WRITE_TOKEN_MONITORING   # write-capable role

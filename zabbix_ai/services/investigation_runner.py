@@ -133,3 +133,18 @@ class InvestigationRunner:
         if not self._orch:
             raise RuntimeError("InvestigationRunner not entered")
         return self._orch.investigate_streaming(ctx)
+
+    # ── Public accessors (avoid reaching into private attrs) ──────────
+    @property
+    def memory(self):
+        return self._mem
+
+    def client(self, name: str):
+        return self._zabbix_clients.get(name)
+
+    def has_client(self, name: str) -> bool:
+        return name in self._zabbix_clients
+
+    def set_model(self, model: str) -> None:
+        if self._orch is not None:
+            self._orch.model = model

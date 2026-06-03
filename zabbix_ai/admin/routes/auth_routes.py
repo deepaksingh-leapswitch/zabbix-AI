@@ -41,7 +41,12 @@ def _real_ip(request: Request) -> str:
 @router.get("/admin/login", response_class=HTMLResponse)
 async def login_page(request: Request) -> HTMLResponse:
     settings = request.app.state.settings
-    google_sso_enabled = settings.oauth_google is not None
+    from zabbix_ai.admin.config_overlay import resolve_oauth_google
+    og = await resolve_oauth_google(
+        getattr(request.app.state, "memory", None),
+        getattr(request.app.state, "crypto_key", None),
+        settings.oauth_google)
+    google_sso_enabled = og is not None
     return request.app.state.templates.TemplateResponse(
         request, "admin/login.html",
         {"flashes": [], "user": None, "active": "login",
@@ -74,7 +79,7 @@ async def login_submit(request: Request, username: str = Form(...),
             target=username, ip=ip,
             details={"reason": "invalid credentials"},
         )
-        return _login_error(request, "invalid credentials")
+        return await _login_error(request, "invalid credentials")
 
     # First-time login: enrollment flow handled via separate page
     if not user["totp_enrolled"]:
@@ -95,7 +100,7 @@ async def login_submit(request: Request, username: str = Form(...),
             by_user=username, ip=ip,
             details={"reason": "TOTP required or invalid"},
         )
-        return _login_error(request, "TOTP required or invalid")
+        return await _login_error(request, "TOTP required or invalid")
 
     cookie = await auth.create_session(
         memory, user_id=user["id"], secret=secret, ttl_seconds=ttl,
@@ -172,13 +177,13 @@ async def enroll_submit(request: Request, totp_code: str = Form(...),
         "SELECT totp_secret, username FROM users WHERE id=?", (user_id,),
     )
     if not row:
-        return _login_error(request, "TOTP code didn't match — try again")
+        return await _login_error(request, "TOTP code didn't match — try again")
     totp_secret, username = row
     totp_valid = await users.verify_totp_with_replay_check(
         memory, user_id, totp_secret, totp_code
     )
     if not totp_valid:
-        return _login_error(request, "TOTP code didn't match — try again")
+        return await _login_error(request, "TOTP code didn't match — try again")
     await users.set_totp_enrolled(memory, user_id)
     await log_admin_event(
         memory, event_type="totp_enroll",
@@ -226,9 +231,14 @@ async def logout(request: Request,
     return resp
 
 
-def _login_error(request: Request, msg: str) -> HTMLResponse:
+async def _login_error(request: Request, msg: str) -> HTMLResponse:
     settings = request.app.state.settings
-    google_sso_enabled = settings.oauth_google is not None
+    from zabbix_ai.admin.config_overlay import resolve_oauth_google
+    og = await resolve_oauth_google(
+        getattr(request.app.state, "memory", None),
+        getattr(request.app.state, "crypto_key", None),
+        settings.oauth_google)
+    google_sso_enabled = og is not None
     return request.app.state.templates.TemplateResponse(
         request, "admin/login.html",
         {"flashes": [{"kind": "err", "text": msg}],

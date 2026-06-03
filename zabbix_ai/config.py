@@ -15,6 +15,10 @@ class ZabbixInstance(BaseModel):
     url: HttpUrl
     token_env: str
     token: SecretStr = SecretStr("")
+    # Optional separate write-role token, only used by zabbix_write for the
+    # approval-gated 6-day monitoring disable. Empty ⇒ disable unavailable.
+    write_token_env: str = ""
+    write_token: SecretStr = SecretStr("")
 
 
 class SlackSettings(BaseModel):
@@ -72,10 +76,50 @@ class AutoInvestigateSettings(BaseModel):
     # Free-form Slack channel id or "#name" (Slack accepts either). When unset,
     # the auto-investigate completes without a Slack post.
     slack_channel: str | None = None
+    # When true (default), the webhook returns 202 immediately and runs
+    # the investigation off the request path. False = legacy inline blocking.
+    async_processing: bool = True
 
     @property
     def webhook_secret(self) -> SecretStr:
         return SecretStr(os.environ.get(self.webhook_secret_env, ""))
+
+
+class TicketFlowSettings(BaseModel):
+    """Auto ticket-raise + Slack follow-up flow (built on auto_investigate).
+
+    Disabled by default. When enabled, a qualifying problem produces an
+    AI-drafted HostBill ticket that a human approves in Slack before it is
+    created, then an escalating follow-up loop chases it until a human
+    replies, the problem recovers, or (at disable_after_days) monitoring is
+    disabled via an approval-gated Zabbix write.
+    """
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+    enabled: bool = False
+    # Only raise a ticket for problems at/above this Zabbix severity (0..5).
+    ticket_min_severity: int = Field(default=4, ge=0, le=5)
+    # Only raise a ticket when the Zabbix problem name matches one of
+    # these case-insensitive regexes. Empty => all problems. Lets you
+    # roll the flow out by problem type (start with ICMP, add disk later).
+    trigger_name_patterns: list[str] = Field(default_factory=list)
+    # Target for internal (non-customer) tickets.
+    internal_department_id: int | None = None
+    internal_client_id: int | None = None
+    # Escalating Slack-thread nudge cadence in minutes; the last value repeats.
+    nudge_schedule_minutes: list[int] = Field(
+        default_factory=lambda: [15, 30, 60, 60])
+    # Stop nudging after this many days with no human reply (ticket stays open).
+    quiet_after_days: int = Field(default=3, ge=1)
+    # If the problem is still active after this many days, offer (Slack-approval)
+    # to disable monitoring in Zabbix.
+    disable_after_days: int = Field(default=6, ge=1)
+    # Optional allowlist of Slack user ids allowed to click Approve / Disable.
+    # Empty means anyone in the channel may approve.
+    approver_slack_user_ids: list[str] = Field(default_factory=list)
+    # Dry-run: post drafts to test_slack_channel, route every ticket to the
+    # internal department, and never write to Zabbix. For safe rollout.
+    dry_run: bool = False
+    test_slack_channel: str | None = None
 
 
 class BudgetSettings(BaseModel):
@@ -130,6 +174,7 @@ class Settings(BaseModel):
     host_briefing: HostBriefingSettings = Field(default_factory=HostBriefingSettings)
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
     auto_investigate: AutoInvestigateSettings | None = None
+    ticket_flow: TicketFlowSettings | None = None
 
 
 def load_settings(config_path: Path | str) -> Settings:
@@ -146,6 +191,9 @@ def load_settings(config_path: Path | str) -> Settings:
         if not tok:
             raise ValueError(f"{inst.token_env} not set in environment")
         inst.token = SecretStr(tok)
+        if inst.write_token_env:
+            inst.write_token = SecretStr(
+                os.environ.get(inst.write_token_env, ""))
     if s.slack is not None:
         bot = os.environ.get(s.slack.bot_token_env)
         if not bot:

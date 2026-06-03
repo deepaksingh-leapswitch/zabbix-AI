@@ -190,3 +190,31 @@ async def overlay_settings(settings: Settings, memory: Memory,
                 slack_channel=slack_channel,
             )
     return settings
+
+
+
+async def resolve_oauth_google(memory, crypto_key, base):
+    """Effective Google OAuth config for the auth/login layer.
+
+    The DB overlay (admin UI Connections store) takes precedence; otherwise the
+    static file config (``base``). Returns None if neither is configured. Any
+    overlay error falls back to ``base`` so a bad row never breaks login.
+    """
+    try:
+        if memory is not None and crypto_key is not None:
+            og = await cs.conn_get(memory, type_="oauth_google", name="primary")
+            if og and og.get("enabled"):
+                secret = await cs.secret_get(
+                    memory, key="oauth_google:primary:client_secret",
+                    crypto_key=crypto_key)
+                if secret and og["config"].get("client_id"):
+                    return OAuthGoogleSettings(
+                        client_id=og["config"]["client_id"],
+                        client_secret_env="",
+                        allowed_email_domain=og["config"].get("allowed_email_domain", ""),
+                        default_role=og["config"].get("default_role", "viewer"),
+                        client_secret=SecretStr(secret),
+                    )
+    except Exception:
+        pass
+    return base

@@ -40,6 +40,7 @@ def _make_settings(
     min_severity: int = 4,
     slack_channel: str | None = None,
     include_slack: bool = False,
+    async_processing: bool = False,
 ) -> Settings:
     """Build a Settings with auto_investigate ready to use."""
     s = Settings(
@@ -52,6 +53,7 @@ def _make_settings(
             min_severity=min_severity,
             allowed_hostgroups=allowed_hostgroups or [],
             slack_channel=slack_channel,
+            async_processing=async_processing,
         ),
     )
     if include_slack:
@@ -224,6 +226,11 @@ def test_full_completion_writes_back_and_posts_slack(mem, with_slack):
     fake_runner._mem = mem
     fake_runner._orch = MagicMock()
     fake_runner._orch.model = "claude-sonnet-4-6"
+    # R3: webhook now uses the runner public API instead of private attrs.
+    fake_runner.memory = mem
+    fake_runner.client = MagicMock(return_value=fake_zabbix_client)
+    fake_runner.has_client = MagicMock(return_value=True)
+    fake_runner.set_model = MagicMock()
 
     slack_post = AsyncMock(return_value={"ok": True, "ts": "1.0"})
 
@@ -306,3 +313,19 @@ def test_rate_limit_kicks_in_after_60_calls(mem):
     assert seen_429, (
         f"Expected at least one 429 within 61 calls; last status was {last_status}"
     )
+
+
+def test_async_processing_returns_202_and_spawns_bg(mem):
+    """Default production mode: webhook returns 202 immediately and hands the
+    investigation to a background task (verified via _spawn_bg, no real work)."""
+    settings = _make_settings(async_processing=True)
+    app = _make_app(settings, memory=mem)
+    client = TestClient(app)
+    with patch("zabbix_ai.adapters.zabbix_webhook._spawn_bg") as spawn:
+        r = _post(client, {
+            "instance": "monitoring", "eventid": "100", "hostid": "7",
+            "severity": "4", "hostgroups": ["Production"],
+        })
+    assert r.status_code == 202, r.text
+    assert r.json()["status"] == "accepted"
+    spawn.assert_called_once()
