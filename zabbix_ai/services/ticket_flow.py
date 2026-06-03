@@ -242,9 +242,14 @@ async def approve_and_create_ticket(
             client_id = (inc["hostbill_client_id"]
                          if inc["ticket_kind"] == "customer"
                          else cfg.internal_client_id)
+            # A ticket with no client_id needs a requester name + email.
+            req_name = None if client_id else (cfg.internal_requester_name or "Zabbix RCA AI")
+            req_email = None if client_id else (cfg.internal_requester_email or None)
             ticket_id = await hb.add_ticket(
-                subject=subject, message=body,
-                department_id=cfg.internal_department_id, client_id=client_id,
+                subject=subject, body=body,
+                dept_id=cfg.internal_department_id, client_id=client_id,
+                priority=3 if (inc.get("severity") or 0) >= 5 else 2,
+                name=req_name, email=req_email,
             )
             baseline = await hb.get_ticket_reply_count(ticket_id)
         except Exception:

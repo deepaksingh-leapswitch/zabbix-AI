@@ -56,17 +56,17 @@ class FakeZabbix:
 class FakeHostBill:
     def __init__(self, reply_count=0):
         self.reply_count = reply_count
-        self.replies = []
-        self.statuses = []
+        self.closed = []
 
     async def get_ticket_reply_count(self, ticket_id):
         return self.reply_count
 
-    async def add_ticket_reply(self, *, ticket_id, message):
-        self.replies.append((ticket_id, message))
+    async def close_ticket(self, *, ticket_id, body=""):
+        self.closed.append(ticket_id)
 
-    async def set_ticket_status(self, *, ticket_id, status):
-        self.statuses.append((ticket_id, status))
+    async def add_ticket_reply(self, *, ticket_id, body,
+                               status_change=None, reply_type="Admin"):
+        pass
 
 
 async def _make_created_incident(memory, *, created_at=None, next_nudge_at=None,
@@ -93,7 +93,7 @@ async def test_resolution_closes_ticket(memory):
         settings=s, memory=memory, inc=inc, zabbix=FakeZabbix(resolved=True),
         slack=FakeSlack(), hostbill=hb, now=datetime.now(UTC))
     assert action == "resolved"
-    assert hb.statuses == [(111, "Closed")]
+    assert hb.closed == [111]
     assert (await tf.get_incident(memory, iid))["state"] == "resolved"
 
 

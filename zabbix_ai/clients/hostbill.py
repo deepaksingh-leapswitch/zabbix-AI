@@ -173,29 +173,36 @@ class HostBillClient:
         data = await self._try_call("getTickets", limit=1)
         return data is not None
 
-    # ── Write API (ticket-flow, migration 008) ───────────────────────────────
-    # These RAISE on failure (unlike the linker helpers) so the Slack approve
-    # handler can report the error back to the operator instead of silently
-    # creating nothing. HostBill API method/param names vary across versions;
-    # adjust to match the live billing.leapswitch.com deployment if needed.
+    # ── Write API (ticket-flow) — wired to the real HostBill admin API ───────
+    # Refs: https://api2.hostbillapp.com/tickets/{addTicket,addTicketReply,
+    #       getTicketDetails}.html. Facts the integration depends on:
+    #   * addTicket requires `subject` + `body`; department is `dept_id`;
+    #     `priority` is an int 0(low)..3(high); a ticket with no `client_id`
+    #     needs `name` + `email`.
+    #   * There is no setTicketStatus — a status change rides on a reply's
+    #     `status_change` (so closing == addTicketReply with status_change=Closed).
+    #   * getTicketDetails returns replies under a TOP-LEVEL `replies` list.
+    # These RAISE on failure so the Slack approve handler can report it.
 
-    async def add_ticket(self, *, subject: str, message: str,
-                         department_id: int | None = None,
+    async def add_ticket(self, *, subject: str, body: str,
                          client_id: int | None = None,
-                         priority: str = "High") -> int:
+                         dept_id: int | None = None,
+                         priority: int = 2,
+                         status: str | None = None,
+                         request_type: str = "Incident",
+                         name: str | None = None,
+                         email: str | None = None) -> int:
         """Create a HostBill ticket and return the new ticket id.
 
-        Pass ``client_id`` to attach the ticket to a customer (customer
-        ticket); omit it for an internal/department-only ticket. Raises
-        HostBillError if no id can be parsed from the response.
+        Pass ``client_id`` to attach the ticket to a customer; for a ticket with
+        no client, HostBill requires ``name`` + ``email``. Raises HostBillError
+        if no ticket id is present in the response.
         """
         data = await self._call(
-            "addTicket",
-            subject=subject, message=message,
-            department_id=department_id, client_id=client_id,
-            priority=priority,
+            "addTicket", subject=subject, body=body,
+            client_id=client_id, dept_id=dept_id, priority=priority,
+            status=status, request_type=request_type, name=name, email=email,
         )
-        # New id appears under varying keys across HostBill versions.
         for key in ("ticket_id", "ticketid", "id"):
             if data.get(key) is not None:
                 return int(data[key])
@@ -206,28 +213,31 @@ class HostBillClient:
                     return int(info[key])
         raise HostBillError(f"addTicket: no ticket id in response: {data}")
 
-    async def add_ticket_reply(self, *, ticket_id: int, message: str) -> None:
-        """Append a reply to an existing ticket. Raises on failure."""
-        await self._call("addTicketReply", id=ticket_id, message=message)
+    async def add_ticket_reply(self, *, ticket_id: int, body: str,
+                               status_change: str | None = None,
+                               reply_type: str = "Admin") -> None:
+        """Append a reply to a ticket (optionally changing status). Raises on failure."""
+        await self._call("addTicketReply", id=ticket_id, body=body,
+                         status_change=status_change, type=reply_type)
 
-    async def set_ticket_status(self, *, ticket_id: int, status: str) -> None:
-        """Change a ticket status (e.g. \"Closed\"). Raises on failure."""
-        await self._call("setTicketStatus", id=ticket_id, status=status)
+    async def close_ticket(self, *, ticket_id: int,
+                           body: str = "Resolved — closing.") -> None:
+        """Close a ticket. HostBill has no setTicketStatus; closing rides on a
+        reply with status_change=Closed."""
+        await self.add_ticket_reply(ticket_id=ticket_id, body=body,
+                                    status_change="Closed")
 
     async def get_ticket_reply_count(self, ticket_id: int) -> int:
-        """Return the number of replies on a ticket, or 0 on any failure.
+        """Number of replies on a ticket (0 on any failure).
 
-        The follow-up worker compares this against the baseline captured at
-        creation: a higher count means a human (customer or staff) replied,
-        which stops the auto-nudge loop.
+        Replies are a TOP-LEVEL list in getTicketDetails. The follow-up worker
+        compares this to the baseline captured at creation: a higher count means
+        a human replied, which stops the auto-nudge loop.
         """
         data = await self._try_call("getTicketDetails", id=ticket_id)
         if data is None:
             return 0
-        ticket = data.get("ticket")
-        if not isinstance(ticket, dict):
-            return 0
-        replies = ticket.get("replies")
+        replies = data.get("replies")
         if isinstance(replies, (list, dict)):
             return len(replies)
         return 0

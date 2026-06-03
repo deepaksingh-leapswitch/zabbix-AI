@@ -105,6 +105,10 @@ class TicketFlowSettings(BaseModel):
     # Target for internal (non-customer) tickets.
     internal_department_id: int | None = None
     internal_client_id: int | None = None
+    # For an internal ticket with no client_id, HostBill requires a
+    # requester name + email on the ticket.
+    internal_requester_name: str = "Zabbix RCA AI"
+    internal_requester_email: str = ""
     # Escalating Slack-thread nudge cadence in minutes; the last value repeats.
     nudge_schedule_minutes: list[int] = Field(
         default_factory=lambda: [15, 30, 60, 60])

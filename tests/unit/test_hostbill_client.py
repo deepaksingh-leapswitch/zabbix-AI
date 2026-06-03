@@ -51,7 +51,7 @@ async def test_error_response_raises(client):
         await client.search_tickets(query="x", status="Closed", limit=10)
 
 
-# ── Write API (ticket-flow, migration 008) ───────────────────────────────
+# ── Write API (ticket-flow) — real HostBill API params ───────────────────────
 
 
 @respx.mock
@@ -60,15 +60,15 @@ async def test_add_ticket_internal_returns_id(client):
         return_value=Response(200, json={"success": 1, "ticket_id": "555"}),
     )
     tid = await client.add_ticket(
-        subject="DB down on web-1", message="RCA: disk full",
-        department_id=3, priority="High",
+        subject="DB down on web-1", body="RCA: disk full",
+        dept_id=3, priority=2, name="Zabbix RCA AI", email="noc@x.io",
     )
     assert tid == 555
     body = route.calls.last.request.read().decode()
     assert "call=addTicket" in body
-    assert "department_id=3" in body
-    # internal ticket: no client_id sent (None is dropped by _call)
-    assert "client_id" not in body
+    assert "dept_id=3" in body
+    assert "body=" in body            # message text is sent as `body`
+    assert "client_id" not in body    # internal ticket: no client
 
 
 @respx.mock
@@ -76,12 +76,9 @@ async def test_add_ticket_customer_sets_client_id(client):
     route = respx.post(URL).mock(
         return_value=Response(200, json={"success": 1, "id": 777}),
     )
-    tid = await client.add_ticket(
-        subject="s", message="m", client_id=42, department_id=3,
-    )
+    tid = await client.add_ticket(subject="s", body="m", client_id=42, dept_id=3)
     assert tid == 777
-    body = route.calls.last.request.read().decode()
-    assert "client_id=42" in body
+    assert "client_id=42" in route.calls.last.request.read().decode()
 
 
 @respx.mock
@@ -90,7 +87,7 @@ async def test_add_ticket_id_nested_in_info(client):
         return_value=Response(200, json={"success": 1,
                                          "info": {"ticket_id": "900"}}),
     )
-    assert await client.add_ticket(subject="s", message="m") == 900
+    assert await client.add_ticket(subject="s", body="m") == 900
 
 
 @respx.mock
@@ -99,36 +96,34 @@ async def test_add_ticket_no_id_raises(client):
         return_value=Response(200, json={"success": 1, "unexpected": "shape"}),
     )
     with pytest.raises(HostBillError, match="no ticket id"):
-        await client.add_ticket(subject="s", message="m")
+        await client.add_ticket(subject="s", body="m")
 
 
 @respx.mock
-async def test_add_ticket_reply_posts_message(client):
-    route = respx.post(URL).mock(
-        return_value=Response(200, json={"success": 1}),
-    )
-    await client.add_ticket_reply(ticket_id=555, message="any update?")
+async def test_add_ticket_reply_posts_body(client):
+    route = respx.post(URL).mock(return_value=Response(200, json={"success": 1}))
+    await client.add_ticket_reply(ticket_id=555, body="any update?")
     body = route.calls.last.request.read().decode()
     assert "call=addTicketReply" in body
+    assert "id=555" in body
+    assert "body=" in body
+
+
+@respx.mock
+async def test_close_ticket_uses_status_change(client):
+    route = respx.post(URL).mock(return_value=Response(200, json={"success": 1}))
+    await client.close_ticket(ticket_id=555, body="done")
+    body = route.calls.last.request.read().decode()
+    assert "call=addTicketReply" in body
+    assert "status_change=Closed" in body
     assert "id=555" in body
 
 
 @respx.mock
-async def test_set_ticket_status(client):
-    route = respx.post(URL).mock(
-        return_value=Response(200, json={"success": 1}),
-    )
-    await client.set_ticket_status(ticket_id=555, status="Closed")
-    body = route.calls.last.request.read().decode()
-    assert "call=setTicketStatus" in body
-    assert "status=Closed" in body
-
-
-@respx.mock
-async def test_get_ticket_reply_count_counts_list(client):
+async def test_get_ticket_reply_count_counts_top_level_list(client):
     respx.post(URL).mock(
-        return_value=Response(200, json={"success": 1, "ticket": {
-            "id": "1", "replies": [{"id": "a"}, {"id": "b"}, {"id": "c"}]}}),
+        return_value=Response(200, json={"success": 1, "replies": [
+            {"id": "a"}, {"id": "b"}, {"id": "c"}]}),
     )
     assert await client.get_ticket_reply_count(1) == 3
 

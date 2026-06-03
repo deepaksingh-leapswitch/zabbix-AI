@@ -110,11 +110,9 @@ async def process_incident(
             tid = inc.get("hostbill_ticket_id")
             if hostbill is not None and tid and not cfg.dry_run:
                 with contextlib.suppress(Exception):
-                    await hostbill.add_ticket_reply(
+                    await hostbill.close_ticket(
                         ticket_id=int(tid),
-                        message="Zabbix problem recovered; auto-closing.")
-                    await hostbill.set_ticket_status(
-                        ticket_id=int(tid), status="Closed")
+                        body="Zabbix problem recovered; auto-closing.")
             await tf.update_incident(memory, inc["id"], state="resolved",
                                      problem_active=0, resolved_at=_now_iso())
             return "resolved"
